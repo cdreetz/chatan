@@ -289,6 +289,27 @@ class TestIntegration:
         assert result2 == "Response"
         assert mock_client.chat.completions.create.call_count == 2
 
+    @patch('openai.OpenAI')
+    def test_generator_function_with_variables(self, mock_openai):
+        """GeneratorFunction should accept default variables."""
+        mock_client = Mock()
+        mock_response = Mock()
+        mock_choice = Mock()
+        mock_choice.message.content = "Question about elephants"
+        mock_response.choices = [mock_choice]
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_openai.return_value = mock_client
+
+        gen = generator("openai", "test-key")
+        func = gen("Question about {animal}", animal="elephants")
+        result = func({})
+
+        assert result == "Question about elephants"
+        mock_client.chat.completions.create.assert_called_once_with(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Question about elephants"}]
+        )
+
     def test_case_insensitive_provider(self):
         """Test that provider names are case insensitive."""
         with patch('chatan.generator.OpenAIGenerator') as mock_gen:
