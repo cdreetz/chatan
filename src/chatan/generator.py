@@ -58,14 +58,24 @@ class AnthropicGenerator(BaseGenerator):
 
 class GeneratorFunction:
     """Callable generator function for use in dataset schemas."""
-    
-    def __init__(self, generator: BaseGenerator, prompt_template: str):
+
+    def __init__(
+        self,
+        generator: BaseGenerator,
+        prompt_template: str,
+        variables: Optional[Dict[str, Any]] = None,
+    ):
         self.generator = generator
         self.prompt_template = prompt_template
-    
+        self.variables = variables or {}
+
     def __call__(self, context: Dict[str, Any]) -> str:
         """Generate content with context substitution."""
-        prompt = self.prompt_template.format(**context)
+        merged = dict(context)
+        for key, value in self.variables.items():
+            merged[key] = value(context) if callable(value) else value
+
+        prompt = self.prompt_template.format(**merged)
         result = self.generator.generate(prompt)
         return result.strip() if isinstance(result, str) else result
 
@@ -81,9 +91,19 @@ class GeneratorClient:
         else:
             raise ValueError(f"Unsupported provider: {provider}")
     
-    def __call__(self, prompt_template: str) -> GeneratorFunction:
-        """Create a generator function."""
-        return GeneratorFunction(self._generator, prompt_template)
+    def __call__(self, prompt_template: str, **variables) -> GeneratorFunction:
+        """Create a generator function.
+
+        Parameters
+        ----------
+        prompt_template:
+            Template string for the prompt.
+        **variables:
+            Optional variables to include when formatting the prompt. If a value
+            is callable it will be invoked with the row context when the
+            generator function is executed.
+        """
+        return GeneratorFunction(self._generator, prompt_template, variables)
 
 
 # Factory function
