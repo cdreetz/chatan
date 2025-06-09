@@ -10,7 +10,7 @@ build:
       - asdf install uv latest
       - asdf global uv latest
     create_environment:
-      - uv venv "${READTHEDOCS_VIRTUAL_ENV_PATH}"
+      - uv venv "${READTHEDOCS_VIRTUALENV_PATH}"
     install:
       - UV_PROJECT_ENVIRONMENT="${READTHEDOCS_VIRTUALENV_PATH}" uv sync --frozen --group docs
 
