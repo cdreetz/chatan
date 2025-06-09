@@ -4,7 +4,7 @@ Examples
 
 
 Basic QA Dataset
-----------------
+----------------------------
 
 .. code-block:: python
 
@@ -12,15 +12,14 @@ Basic QA Dataset
 
    gen = chatan.generator("openai", "YOUR_API_KEY")
    ds = chatan.dataset({
-       "question": gen("write a question about {topic}"),
-       "topic": chatan.sample.choice(["Python", "ML", "Data Science"]),
+       "question": gen("write a example question from a 5th grade math test"),
        "answer": gen("answer: {question}")
    })
 
    df = ds.generate(100)
 
-Mixed Data Types
-----------------
+Creating Data Mixes
+----------------------------
 
 .. code-block:: python
 
@@ -29,22 +28,21 @@ Mixed Data Types
 
    gen = generator("openai", "YOUR_API_KEY")
 
-   mix = {
-       "implementation": "implement a function",
-       "conversion": "convert this code", 
-       "explanation": "explain this concept"
-   }
+   mix = [
+       "san antonio, tx",
+       "marfa, tx", 
+       "paris, fr"
+   ]
 
    ds = dataset({
        "id": sample.uuid(),
-       "task_type": sample.choice(mix),
-       "prompt": gen("write a prompt for {task_type}"),
+       "topic": sample.choice(mix),
+       "prompt": gen("write an example question about the history of {topic}"),
        "response": gen("respond to: {prompt}"),
-       "difficulty": sample.choice(["easy", "medium", "hard"])
    })
 
 Dataset Augmentation
--------------------
+-------------------------------
 
 .. code-block:: python
 

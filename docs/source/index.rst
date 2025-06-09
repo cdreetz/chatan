@@ -11,6 +11,7 @@ Create synthetic datasets with LLM generators and samplers.
 .. toctree::
    :maxdepth: 2
    :caption: Contents:
+   :hidden:
 
    quickstart
    examples
