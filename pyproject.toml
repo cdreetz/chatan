@@ -48,6 +48,13 @@ dev = [
     "sphinx-autodoc-typehints>=2.0.1",
 ]
 
+docs = [
+    "sphinx>=4.0.0",
+    "sphinx-rtd-theme",
+    "sphinx-autodoc-typehints",
+]
+
+
 [project.urls]
 Documentation = "https://github.com/cdreetz/chatan#readme"
 Issues = "https://github.com/cdreetz/chatan/issues"
