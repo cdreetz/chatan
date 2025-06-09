@@ -15,6 +15,7 @@ Create synthetic datasets with LLM generators and samplers.
 
    quickstart
    examples
+   other_examples
    api
 
 Installation
