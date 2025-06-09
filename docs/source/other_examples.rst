@@ -70,4 +70,22 @@ Dataset Triton
     final_df = final_ds.generate(1000)
     final_ds.save("triton_kernel_dataset.parquet")
 
+Transformers Local Generation
+----------------------------------------------
+
+.. code-block:: python
+
+   from chatan import generator, dataset, sample
+
+   # Use a local HuggingFace model
+   gen = generator("transformers", model="gpt2")
+
+   ds = dataset({
+       "topic": sample.choice(["space", "history", "science"]),
+       "prompt": gen("Ask a short question about {topic}"),
+       "response": gen("{prompt}")
+   })
+
+   df = ds.generate(5)
+
 
