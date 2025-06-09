@@ -1,3 +1,7 @@
+# Chatan
+
+Create diverse, synthetic datasets. Start from scratch or augment an existing dataset. Simple define your dataset schema as a set of generators, typically being LLMs with a prompt describing what kind of examples you want.
+
 ## Installation
 
 ```
