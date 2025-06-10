@@ -3,9 +3,10 @@
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 from chatan.generator import (
-    OpenAIGenerator, 
-    AnthropicGenerator, 
-    GeneratorFunction, 
+    OpenAIGenerator,
+    AnthropicGenerator,
+    TransformersGenerator,
+    GeneratorFunction,
     GeneratorClient,
     generator
 )
@@ -138,6 +139,23 @@ class TestAnthropicGenerator:
         assert call_args[1]["temperature"] == 0.7
 
 
+class TestTransformersGenerator:
+    """Test local HuggingFace/transformers generator."""
+
+    @patch('transformers.pipeline')
+    def test_generate_basic(self, mock_pipeline):
+        mock_func = Mock()
+        mock_func.return_value = [{"generated_text": " Hello "}]
+        mock_pipeline.return_value = mock_func
+
+        gen = TransformersGenerator(model="gpt2")
+        result = gen.generate("Test prompt")
+
+        assert result == "Hello"
+        mock_pipeline.assert_called_once_with("text-generation", model="gpt2")
+        mock_func.assert_called_once_with("Test prompt")
+
+
 class TestGeneratorFunction:
     """Test GeneratorFunction wrapper."""
 
@@ -187,6 +205,12 @@ class TestGeneratorClient:
         client = GeneratorClient("anthropic", "test-key", model="claude-3-opus-20240229")
         mock_anthropic_gen.assert_called_once_with("test-key", model="claude-3-opus-20240229")
 
+    @patch('chatan.generator.TransformersGenerator')
+    def test_transformers_client_creation(self, mock_hf_gen):
+        """Test Transformers client creation."""
+        client = GeneratorClient("transformers", model="gpt2")
+        mock_hf_gen.assert_called_once_with(model="gpt2")
+
     def test_unsupported_provider(self):
         """Test error handling for unsupported providers."""
         with pytest.raises(ValueError, match="Unsupported provider: invalid"):
@@ -221,6 +245,12 @@ class TestGeneratorFactory:
         """Test default provider is openai."""
         generator(api_key="test-key")
         mock_client.assert_called_once_with("openai", "test-key")
+
+    @patch('chatan.generator.GeneratorClient')
+    def test_transformers_provider_no_key(self, mock_client):
+        """Transformers provider should not require API key."""
+        generator("transformers", model="gpt2")
+        mock_client.assert_called_once_with("transformers", None, model="gpt2")
 
 
 class TestIntegration:
@@ -289,6 +319,21 @@ class TestIntegration:
         assert result2 == "Response"
         assert mock_client.chat.completions.create.call_count == 2
 
+    @patch('transformers.pipeline')
+    def test_end_to_end_transformers(self, mock_pipeline):
+        """Test complete Transformers generation pipeline."""
+        mock_func = Mock()
+        mock_func.return_value = [{"generated_text": "Hello"}]
+        mock_pipeline.return_value = mock_func
+
+        gen = generator("transformers", model="gpt2")
+        func = gen("Say hi to {name}")
+        result = func({"name": "Bob"})
+
+        assert result == "Hello"
+        mock_pipeline.assert_called_once_with("text-generation", model="gpt2")
+        mock_func.assert_called_once_with("Say hi to Bob")
+
     @patch('openai.OpenAI')
     def test_generator_function_with_variables(self, mock_openai):
         """GeneratorFunction should accept default variables."""
@@ -318,6 +363,10 @@ class TestIntegration:
             
         with patch('chatan.generator.AnthropicGenerator') as mock_gen:
             generator("ANTHROPIC", "test-key")
+            mock_gen.assert_called_once()
+
+        with patch('chatan.generator.TransformersGenerator') as mock_gen:
+            generator("TRANSFORMERS", model="gpt2")
             mock_gen.assert_called_once()
 
 

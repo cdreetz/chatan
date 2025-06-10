@@ -3,6 +3,7 @@
 from typing import Dict, Any, Optional, Union, List
 import openai
 import anthropic
+from transformers import pipeline
 from abc import ABC, abstractmethod
 
 
@@ -56,6 +57,17 @@ class AnthropicGenerator(BaseGenerator):
         return response.content[0].text.strip()
 
 
+class TransformersGenerator(BaseGenerator):
+    """Local HuggingFace/transformers generator."""
+
+    def __init__(self, model: str = "gpt2", **kwargs):
+        self.pipeline = pipeline("text-generation", model=model, **kwargs)
+
+    def generate(self, prompt: str, **kwargs) -> str:
+        result = self.pipeline(prompt, **kwargs)[0]["generated_text"]
+        return result.strip()
+
+
 class GeneratorFunction:
     """Callable generator function for use in dataset schemas."""
 
@@ -82,12 +94,19 @@ class GeneratorFunction:
 
 class GeneratorClient:
     """Main interface for creating generators."""
-    
-    def __init__(self, provider: str, api_key: str, **kwargs):
-        if provider.lower() == "openai":
+
+    def __init__(self, provider: str, api_key: Optional[str] = None, **kwargs):
+        provider_lower = provider.lower()
+        if provider_lower == "openai":
+            if api_key is None:
+                raise ValueError("API key is required for OpenAI")
             self._generator = OpenAIGenerator(api_key, **kwargs)
-        elif provider.lower() == "anthropic":
+        elif provider_lower == "anthropic":
+            if api_key is None:
+                raise ValueError("API key is required for Anthropic")
             self._generator = AnthropicGenerator(api_key, **kwargs)
+        elif provider_lower in {"huggingface", "transformers", "hf"}:
+            self._generator = TransformersGenerator(**kwargs)
         else:
             raise ValueError(f"Unsupported provider: {provider}")
     
@@ -109,6 +128,6 @@ class GeneratorClient:
 # Factory function
 def generator(provider: str = "openai", api_key: Optional[str] = None, **kwargs) -> GeneratorClient:
     """Create a generator client."""
-    if api_key is None:
+    if provider.lower() in {"openai", "anthropic"} and api_key is None:
         raise ValueError("API key is required")
     return GeneratorClient(provider, api_key, **kwargs)
