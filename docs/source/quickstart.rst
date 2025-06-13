@@ -37,7 +37,7 @@ Basic Usage
 
    .. code-block:: python
 
-      # Generate 100 samples
+      # Generate 100 samples with a progress bar
       df = ds.generate(100)
       
       # Save to file

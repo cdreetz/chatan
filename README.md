@@ -23,7 +23,7 @@ ds = chatan.dataset({
     "response": gen("answer this question: {prompt}")
 })
 
-# Generate the data
+# Generate the data with a progress bar
 df = ds.generate(n=10)
 ```
 
