@@ -3,6 +3,7 @@
 from typing import Dict, Any, Union, Optional, List, Callable
 import pandas as pd
 from datasets import Dataset as HFDataset
+from tqdm import tqdm
 from .generator import GeneratorFunction
 from .sampler import SampleFunction
 
@@ -27,17 +28,34 @@ class Dataset:
         self.n = n
         self._data = None
     
-    def generate(self, n: Optional[int] = None) -> pd.DataFrame:
-        """Generate the dataset."""
+    def generate(
+        self, n: Optional[int] = None, progress: bool = True
+    ) -> pd.DataFrame:
+        """Generate the dataset.
+
+        Parameters
+        ----------
+        n:
+            Number of samples to generate. Defaults to the value provided at
+            initialization.
+        progress:
+            Whether to display a progress bar. Defaults to ``True``. Pass
+            ``False`` to disable the progress output.
+        """
         num_samples = n or self.n
-        
+        show_progress = progress
+
         # Build dependency graph
         dependencies = self._build_dependency_graph()
         execution_order = self._topological_sort(dependencies)
-        
+
         # Generate data
         data = []
-        for i in range(num_samples):
+        iterator = range(num_samples)
+        if show_progress:
+            iterator = tqdm(iterator, desc="Generating", leave=False)
+
+        for _ in iterator:
             row = {}
             for column in execution_order:
                 value = self._generate_value(column, row)
