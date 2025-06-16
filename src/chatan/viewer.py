@@ -64,6 +64,8 @@ class LiveViewer:
             data = {"rows": [], "completed": False, "current_row": None}
         
         data["rows"].append(row)
+        # Keep current_row so we can update the UI with final values
+        data["completed_row"] = {"index": len(data["rows"]) - 1, "data": row}
         data["current_row"] = None  # Clear current row when row is complete
         
         with open(self.data_file, 'w') as f:
@@ -325,22 +327,14 @@ class LiveViewer:
                     updateCurrentRow(data.current_row);
                 }}
                 
-                // Handle completed rows - just update status, don't add new rows
+                // Handle completed rows
+                if (data.completed_row) {{
+                    completeRow(data.completed_row);
+                }}
+                
                 if (data.rows.length > rowCount) {{
                     rowCount = data.rows.length;
                     updateStatus(data.completed);
-                    
-                    // Mark current row as complete (remove generating styles)
-                    if (currentRowElement) {{
-                        const generatingCells = currentRowElement.querySelectorAll('.cell-generating');
-                        generatingCells.forEach(cell => {{
-                            cell.classList.remove('cell-generating');
-                            if (cell.textContent === '...') {{
-                                cell.textContent = ''; // Clear placeholder if still there
-                            }}
-                        }});
-                        currentRowElement = null; // Ready for next row
-                    }}
                 }}
                 
                 if (data.completed) {{
@@ -395,6 +389,25 @@ class LiveViewer:
                     cell.classList.remove('cell-generating');
                 }}
             }});
+        }}
+        
+        function completeRow(completedRow) {{
+            // Find the row element and update it with final data
+            const rowElement = document.querySelector(`tr[data-row-index="${{completedRow.index}}"]`);
+            if (rowElement) {{
+                {json.dumps(columns)}.forEach((col, colIndex) => {{
+                    const cell = rowElement.cells[colIndex + 1]; // +1 for row number column
+                    if (cell) {{
+                        cell.textContent = completedRow.data[col] || '';
+                        cell.classList.remove('cell-generating');
+                    }}
+                }});
+            }}
+            
+            // Clear current row if this was it
+            if (currentRowElement && parseInt(currentRowElement.dataset.rowIndex) === completedRow.index) {{
+                currentRowElement = null;
+            }}
         }}
         
         function addRows(rows) {{
