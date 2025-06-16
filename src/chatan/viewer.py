@@ -325,18 +325,22 @@ class LiveViewer:
                     updateCurrentRow(data.current_row);
                 }}
                 
-                // Handle completed rows
+                // Handle completed rows - just update status, don't add new rows
                 if (data.rows.length > rowCount) {{
-                    // Remove current row element since it's now complete
-                    if (currentRowElement) {{
-                        currentRowElement.remove();
-                        currentRowElement = null;
-                    }}
-                    
-                    const newRows = data.rows.slice(rowCount);
-                    addRows(newRows);
                     rowCount = data.rows.length;
                     updateStatus(data.completed);
+                    
+                    // Mark current row as complete (remove generating styles)
+                    if (currentRowElement) {{
+                        const generatingCells = currentRowElement.querySelectorAll('.cell-generating');
+                        generatingCells.forEach(cell => {{
+                            cell.classList.remove('cell-generating');
+                            if (cell.textContent === '...') {{
+                                cell.textContent = ''; // Clear placeholder if still there
+                            }}
+                        }});
+                        currentRowElement = null; // Ready for next row
+                    }}
                 }}
                 
                 if (data.completed) {{
@@ -359,16 +363,16 @@ class LiveViewer:
                 tbody.innerHTML = '';
             }}
             
-            // Create or update current row element
-            if (!currentRowElement || currentRowElement.dataset.rowIndex != currentRow.index) {{
+            // Create new row element only if we don't have one for this index
+            if (!currentRowElement || parseInt(currentRowElement.dataset.rowIndex) !== currentRow.index) {{
                 currentRowElement = document.createElement('tr');
                 currentRowElement.className = 'new-row';
                 currentRowElement.dataset.rowIndex = currentRow.index;
                 
-                // Row number (use rowCount + 1 since this is the next row being generated)
+                // Row number
                 const numCell = document.createElement('td');
                 numCell.className = 'row-number';
-                numCell.textContent = rowCount + 1;
+                numCell.textContent = currentRow.index + 1;
                 currentRowElement.appendChild(numCell);
                 
                 // Create empty cells for all columns
