@@ -327,10 +327,15 @@ class LiveViewer:
                 
                 // Handle completed rows
                 if (data.rows.length > rowCount) {{
+                    // Remove current row element since it's now complete
+                    if (currentRowElement) {{
+                        currentRowElement.remove();
+                        currentRowElement = null;
+                    }}
+                    
                     const newRows = data.rows.slice(rowCount);
                     addRows(newRows);
                     rowCount = data.rows.length;
-                    currentRowElement = null; // Clear current row element
                     updateStatus(data.completed);
                 }}
                 
@@ -355,14 +360,15 @@ class LiveViewer:
             }}
             
             // Create or update current row element
-            if (!currentRowElement) {{
+            if (!currentRowElement || currentRowElement.dataset.rowIndex != currentRow.index) {{
                 currentRowElement = document.createElement('tr');
                 currentRowElement.className = 'new-row';
+                currentRowElement.dataset.rowIndex = currentRow.index;
                 
-                // Row number
+                // Row number (use rowCount + 1 since this is the next row being generated)
                 const numCell = document.createElement('td');
                 numCell.className = 'row-number';
-                numCell.textContent = currentRow.index + 1;
+                numCell.textContent = rowCount + 1;
                 currentRowElement.appendChild(numCell);
                 
                 // Create empty cells for all columns
