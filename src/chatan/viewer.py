@@ -34,7 +34,7 @@ class LiveViewer:
         
         # Initialize empty data file
         with open(self.data_file, 'w') as f:
-            json.dump({"rows": [], "completed": False}, f)
+            json.dump({"rows": [], "completed": False, "current_row": None}, f)
         
         # Create HTML file
         html_content = self._generate_html(list(schema.keys()))
@@ -61,12 +61,46 @@ class LiveViewer:
             with open(self.data_file, 'r') as f:
                 data = json.load(f)
         except:
-            data = {"rows": [], "completed": False}
+            data = {"rows": [], "completed": False, "current_row": None}
         
         data["rows"].append(row)
+        data["current_row"] = None  # Clear current row when row is complete
         
         with open(self.data_file, 'w') as f:
             json.dump(data, f)
+    
+    def start_row(self, row_index: int):
+        """Start a new row with empty cells."""
+        if not self._active or not self.data_file:
+            return
+            
+        try:
+            with open(self.data_file, 'r') as f:
+                data = json.load(f)
+        except:
+            data = {"rows": [], "completed": False, "current_row": None}
+        
+        data["current_row"] = {"index": row_index, "cells": {}}
+        
+        with open(self.data_file, 'w') as f:
+            json.dump(data, f)
+    
+    def update_cell(self, column: str, value: Any):
+        """Update a single cell in the current row."""
+        if not self._active or not self.data_file:
+            return
+            
+        try:
+            with open(self.data_file, 'r') as f:
+                data = json.load(f)
+        except:
+            data = {"rows": [], "completed": False, "current_row": None}
+        
+        if data.get("current_row"):
+            data["current_row"]["cells"][column] = value
+            
+            with open(self.data_file, 'w') as f:
+                json.dump(data, f)
     
     def complete(self):
         """Mark generation as complete."""
@@ -77,7 +111,7 @@ class LiveViewer:
             with open(self.data_file, 'r') as f:
                 data = json.load(f)
         except:
-            data = {"rows": [], "completed": False}
+            data = {"rows": [], "completed": False, "current_row": None}
         
         data["completed"] = True
         
@@ -216,6 +250,17 @@ class LiveViewer:
             white-space: pre-wrap;
         }}
         
+        .cell-generating {{
+            background: linear-gradient(90deg, #fef3c7, #fbbf24, #fef3c7);
+            background-size: 200% 200%;
+            animation: shimmer 1.5s ease-in-out infinite;
+        }}
+        
+        @keyframes shimmer {{
+            0% {{ background-position: -200% 0; }}
+            100% {{ background-position: 200% 0; }}
+        }}
+        
         .new-row {{
             animation: slideIn 0.3s ease-out;
         }}
@@ -268,16 +313,24 @@ class LiveViewer:
 
     <script>
         let rowCount = 0;
+        let currentRowElement = null;
         
         async function fetchData() {{
             try {{
                 const response = await fetch('data.json?' + new Date().getTime());
                 const data = await response.json();
                 
+                // Handle current row updates
+                if (data.current_row) {{
+                    updateCurrentRow(data.current_row);
+                }}
+                
+                // Handle completed rows
                 if (data.rows.length > rowCount) {{
                     const newRows = data.rows.slice(rowCount);
                     addRows(newRows);
                     rowCount = data.rows.length;
+                    currentRowElement = null; // Clear current row element
                     updateStatus(data.completed);
                 }}
                 
@@ -290,15 +343,52 @@ class LiveViewer:
                 console.error('Error fetching data:', error);
             }}
             
-            setTimeout(fetchData, 300);
+            setTimeout(fetchData, 200); // Faster polling for cell updates
+        }}
+        
+        function updateCurrentRow(currentRow) {{
+            const tbody = document.getElementById('tableBody');
+            
+            // Remove loading message if present
+            if (tbody.children.length === 1 && tbody.children[0].cells.length === {len(columns) + 1}) {{
+                tbody.innerHTML = '';
+            }}
+            
+            // Create or update current row element
+            if (!currentRowElement) {{
+                currentRowElement = document.createElement('tr');
+                currentRowElement.className = 'new-row';
+                
+                // Row number
+                const numCell = document.createElement('td');
+                numCell.className = 'row-number';
+                numCell.textContent = currentRow.index + 1;
+                currentRowElement.appendChild(numCell);
+                
+                // Create empty cells for all columns
+                {json.dumps(columns)}.forEach(col => {{
+                    const td = document.createElement('td');
+                    td.className = 'cell-content cell-generating';
+                    td.textContent = '...';
+                    td.id = `cell-${{currentRow.index}}-${{col}}`;
+                    currentRowElement.appendChild(td);
+                }});
+                
+                tbody.appendChild(currentRowElement);
+            }}
+            
+            // Update cells with values
+            Object.entries(currentRow.cells).forEach(([col, value]) => {{
+                const cell = document.getElementById(`cell-${{currentRow.index}}-${{col}}`);
+                if (cell) {{
+                    cell.textContent = value || '';
+                    cell.classList.remove('cell-generating');
+                }}
+            }});
         }}
         
         function addRows(rows) {{
             const tbody = document.getElementById('tableBody');
-            
-            if (tbody.children.length === 1 && tbody.children[0].cells.length === {len(columns) + 1}) {{
-                tbody.innerHTML = '';
-            }}
             
             rows.forEach((row, index) => {{
                 const tr = document.createElement('tr');
@@ -347,9 +437,10 @@ def generate_with_viewer(
     progress: bool = True,
     viewer_title: str = "Dataset Generation",
     auto_open: bool = True,
-    stream_delay: float = 0.05
+    stream_delay: float = 0.05,
+    cell_delay: float = 0.3
 ):
-    """Generate dataset with live viewer.
+    """Generate dataset with live viewer showing cell-by-cell generation.
     
     Args:
         dataset_instance: The Dataset instance
@@ -358,6 +449,7 @@ def generate_with_viewer(
         viewer_title: Title for the HTML viewer
         auto_open: Whether to auto-open browser
         stream_delay: Delay between rows for streaming effect
+        cell_delay: Delay between individual cell generations
     
     Returns:
         pd.DataFrame: Generated dataset
@@ -378,15 +470,27 @@ def generate_with_viewer(
         data = []
         
         for i in range(num_samples):
+            # Start new row
+            viewer.start_row(i)
+            
             row = {}
             for column in execution_order:
+                # Generate cell value
                 value = dataset_instance._generate_value(column, row)
                 row[column] = value
+                
+                # Update viewer with new cell value
+                viewer.update_cell(column, value)
+                
+                # Delay to show cell generation effect
+                if cell_delay > 0:
+                    time.sleep(cell_delay)
             
+            # Complete the row
             data.append(row)
             viewer.add_row(row)
             
-            # Small delay for streaming effect
+            # Small delay between rows
             if stream_delay > 0:
                 time.sleep(stream_delay)
         
