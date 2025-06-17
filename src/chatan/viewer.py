@@ -419,11 +419,7 @@ class LiveViewer:
                 if (data.completed) {{
                     document.getElementById('statusDot').classList.add('complete');
                     document.getElementById('statusText').textContent = 'Complete';
-                    Object.keys(currentRowElements).forEach(key => {{
-                        if (currentRowElements[key] && currentRowElements[key].parentNode) {{
-                            currentRowElements[key].remove();
-                        }}
-                    }});
+
                     currentRowElements = {{}};
                     return;
                 }}
