@@ -1,9 +1,10 @@
-"""LLM generators for synthetic data creation."""
+"""LLM generators for synthetic data creation with async support."""
 
 from typing import Dict, Any, Optional, Union, List
 import openai
 import anthropic
 from abc import ABC, abstractmethod
+import asyncio
 
 
 class BaseGenerator(ABC):
@@ -13,13 +14,19 @@ class BaseGenerator(ABC):
     def generate(self, prompt: str, **kwargs) -> str:
         """Generate content from a prompt."""
         pass
+    
+    @abstractmethod
+    async def generate_async(self, prompt: str, **kwargs) -> str:
+        """Generate content from a prompt asynchronously."""
+        pass
 
 
 class OpenAIGenerator(BaseGenerator):
-    """OpenAI GPT generator."""
+    """OpenAI GPT generator with async support."""
     
     def __init__(self, api_key: str, model: str = "gpt-3.5-turbo", **kwargs):
         self.client = openai.OpenAI(api_key=api_key)
+        self.async_client = openai.AsyncOpenAI(api_key=api_key)
         self.model = model
         self.default_kwargs = kwargs
     
@@ -33,13 +40,25 @@ class OpenAIGenerator(BaseGenerator):
             **merged_kwargs
         )
         return response.choices[0].message.content.strip()
+    
+    async def generate_async(self, prompt: str, **kwargs) -> str:
+        """Generate content using OpenAI API asynchronously."""
+        merged_kwargs = {**self.default_kwargs, **kwargs}
+        
+        response = await self.async_client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            **merged_kwargs
+        )
+        return response.choices[0].message.content.strip()
 
 
 class AnthropicGenerator(BaseGenerator):
-    """Anthropic Claude generator."""
+    """Anthropic Claude generator with async support."""
     
     def __init__(self, api_key: str, model: str = "claude-3-sonnet-20240229", **kwargs):
         self.client = anthropic.Anthropic(api_key=api_key)
+        self.async_client = anthropic.AsyncAnthropic(api_key=api_key)
         self.model = model
         self.default_kwargs = kwargs
     
@@ -54,10 +73,22 @@ class AnthropicGenerator(BaseGenerator):
             **merged_kwargs
         )
         return response.content[0].text.strip()
+    
+    async def generate_async(self, prompt: str, **kwargs) -> str:
+        """Generate content using Anthropic API asynchronously."""
+        merged_kwargs = {**self.default_kwargs, **kwargs}
+        
+        response = await self.async_client.messages.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=merged_kwargs.pop("max_tokens", 1000),
+            **merged_kwargs
+        )
+        return response.content[0].text.strip()
 
 
 class GeneratorFunction:
-    """Callable generator function for use in dataset schemas."""
+    """Callable generator function for use in dataset schemas with async support."""
 
     def __init__(
         self,
@@ -70,13 +101,28 @@ class GeneratorFunction:
         self.variables = variables or {}
 
     def __call__(self, context: Dict[str, Any]) -> str:
-        """Generate content with context substitution."""
+        """Generate content with context substitution (sync)."""
         merged = dict(context)
         for key, value in self.variables.items():
             merged[key] = value(context) if callable(value) else value
 
         prompt = self.prompt_template.format(**merged)
         result = self.generator.generate(prompt)
+        return result.strip() if isinstance(result, str) else result
+    
+    async def generate_async(self, context: Dict[str, Any]) -> str:
+        """Generate content with context substitution (async)."""
+        merged = dict(context)
+        for key, value in self.variables.items():
+            if asyncio.iscoroutinefunction(value):
+                merged[key] = await value(context)
+            elif callable(value):
+                merged[key] = value(context)
+            else:
+                merged[key] = value
+
+        prompt = self.prompt_template.format(**merged)
+        result = await self.generator.generate_async(prompt)
         return result.strip() if isinstance(result, str) else result
 
 

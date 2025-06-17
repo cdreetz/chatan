@@ -1,4 +1,4 @@
-"""Live HTML viewer for dataset generation."""
+"""Live HTML viewer for dataset generation with async batch processing."""
 
 import json
 import os
@@ -6,9 +6,10 @@ import tempfile
 import webbrowser
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable
-import threading
 import time
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+import asyncio
+from aiohttp import web
+import aiohttp_cors
 import atexit
 
 
@@ -21,12 +22,13 @@ class LiveViewer:
         self.temp_dir = None
         self.html_file = None
         self.data_file = None
-        self.server = None
-        self.server_thread = None
+        self.app = None
+        self.runner = None
+        self.site = None
         self.port = 8000
         self._active = False
         
-    def start(self, schema: Dict[str, Any]) -> str:
+    async def start(self, schema: Dict[str, Any]) -> str:
         """Start the viewer and return the URL."""
         self.temp_dir = tempfile.mkdtemp()
         self.html_file = Path(self.temp_dir) / "viewer.html"
@@ -34,15 +36,15 @@ class LiveViewer:
         
         # Initialize empty data file
         with open(self.data_file, 'w') as f:
-            json.dump({"rows": [], "completed": False, "current_row": None}, f)
+            json.dump({"rows": [], "completed": False, "current_rows": {}}, f)
         
         # Create HTML file
         html_content = self._generate_html(list(schema.keys()))
         with open(self.html_file, 'w') as f:
             f.write(html_content)
         
-        # Start local server
-        self._start_server()
+        # Start async server
+        await self._start_server()
         
         # Open in browser
         url = f"http://localhost:{self.port}/viewer.html"
@@ -51,25 +53,6 @@ class LiveViewer:
         
         self._active = True
         return url
-    
-    def add_row(self, row: Dict[str, Any]):
-        """Add a new row to the viewer."""
-        if not self._active or not self.data_file:
-            return
-            
-        try:
-            with open(self.data_file, 'r') as f:
-                data = json.load(f)
-        except:
-            data = {"rows": [], "completed": False, "current_row": None}
-        
-        data["rows"].append(row)
-        # Keep current_row so we can update the UI with final values
-        data["completed_row"] = {"index": len(data["rows"]) - 1, "data": row}
-        data["current_row"] = None  # Clear current row when row is complete
-        
-        with open(self.data_file, 'w') as f:
-            json.dump(data, f)
     
     def start_row(self, row_index: int):
         """Start a new row with empty cells."""
@@ -80,15 +63,15 @@ class LiveViewer:
             with open(self.data_file, 'r') as f:
                 data = json.load(f)
         except:
-            data = {"rows": [], "completed": False, "current_row": None}
+            data = {"rows": [], "completed": False, "current_rows": {}}
         
-        data["current_row"] = {"index": row_index, "cells": {}}
+        data["current_rows"][str(row_index)] = {"index": row_index, "cells": {}}
         
         with open(self.data_file, 'w') as f:
             json.dump(data, f)
     
-    def update_cell(self, column: str, value: Any):
-        """Update a single cell in the current row."""
+    def update_cell(self, row_index: int, column: str, value: Any):
+        """Update a single cell in a specific row."""
         if not self._active or not self.data_file:
             return
             
@@ -96,13 +79,36 @@ class LiveViewer:
             with open(self.data_file, 'r') as f:
                 data = json.load(f)
         except:
-            data = {"rows": [], "completed": False, "current_row": None}
+            data = {"rows": [], "completed": False, "current_rows": {}}
         
-        if data.get("current_row"):
-            data["current_row"]["cells"][column] = value
+        row_key = str(row_index)
+        if row_key in data.get("current_rows", {}):
+            data["current_rows"][row_key]["cells"][column] = value
             
             with open(self.data_file, 'w') as f:
                 json.dump(data, f)
+    
+    def complete_row(self, row_index: int, row_data: Dict[str, Any]):
+        """Mark a row as complete and move it to completed rows."""
+        if not self._active or not self.data_file:
+            return
+            
+        try:
+            with open(self.data_file, 'r') as f:
+                data = json.load(f)
+        except:
+            data = {"rows": [], "completed": False, "current_rows": {}}
+        
+        # Add to completed rows
+        data["rows"].append(row_data)
+        
+        # Remove from current rows
+        row_key = str(row_index)
+        if row_key in data.get("current_rows", {}):
+            del data["current_rows"][row_key]
+        
+        with open(self.data_file, 'w') as f:
+            json.dump(data, f)
     
     def complete(self):
         """Mark generation as complete."""
@@ -113,39 +119,69 @@ class LiveViewer:
             with open(self.data_file, 'r') as f:
                 data = json.load(f)
         except:
-            data = {"rows": [], "completed": False, "current_row": None}
+            data = {"rows": [], "completed": False, "current_rows": {}}
         
         data["completed"] = True
+        data["current_rows"] = {}
         
         with open(self.data_file, 'w') as f:
             json.dump(data, f)
     
-    def stop(self):
+    async def stop(self):
         """Stop the viewer and cleanup resources."""
         self._active = False
-        if self.server:
-            self.server.shutdown()
-            self.server.server_close()
+        if self.site:
+            await self.site.stop()
+        if self.runner:
+            await self.runner.cleanup()
     
-    def _start_server(self):
-        """Start a local HTTP server."""
-        os.chdir(self.temp_dir)
+    async def _start_server(self):
+        """Start an async HTTP server."""
+        self.app = web.Application()
         
-        # Find available port
+        # Add CORS
+        cors = aiohttp_cors.setup(self.app, defaults={
+            "*": aiohttp_cors.ResourceOptions(
+                allow_credentials=True,
+                expose_headers="*",
+                allow_headers="*",
+                allow_methods="*"
+            )
+        })
+        
+        # Add routes
+        self.app.router.add_get('/viewer.html', self._serve_html)
+        self.app.router.add_get('/data.json', self._serve_data)
+        
+        # Add CORS to routes
+        for route in list(self.app.router.routes()):
+            cors.add(route)
+        
+        # Find available port and start server
         for port in range(8000, 8100):
             try:
-                self.server = HTTPServer(("localhost", port), SimpleHTTPRequestHandler)
+                self.runner = web.AppRunner(self.app)
+                await self.runner.setup()
+                self.site = web.TCPSite(self.runner, 'localhost', port)
+                await self.site.start()
                 self.port = port
                 break
             except OSError:
+                if self.runner:
+                    await self.runner.cleanup()
                 continue
-        
-        if self.server:
-            self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-            self.server_thread.start()
-            
-            # Register cleanup on exit
-            atexit.register(self.stop)
+    
+    async def _serve_html(self, request):
+        """Serve the HTML file."""
+        with open(self.html_file, 'r') as f:
+            content = f.read()
+        return web.Response(text=content, content_type='text/html')
+    
+    async def _serve_data(self, request):
+        """Serve the data JSON file."""
+        with open(self.data_file, 'r') as f:
+            content = f.read()
+        return web.Response(text=content, content_type='application/json')
     
     def _generate_html(self, columns) -> str:
         """Generate the HTML content."""
@@ -331,12 +367,11 @@ class LiveViewer:
 
     <script>
         let rowCount = 0;
-        let currentRowElement = null;
+        let currentRowElements = {{}};
 
         function makeColumnsResizable(table) {{
             const headers = table.querySelectorAll('th');
             headers.forEach((th, index) => {{
-
                 if (index === headers.length - 1) return;
                 const resizer = document.createElement('div');
                 resizer.className = 'col-resizer';
@@ -345,7 +380,6 @@ class LiveViewer:
                 let startX, startWidth;
 
                 resizer.addEventListener('mousedown', (e) => {{
-
                     startX = e.clientX;
                     startWidth = th.offsetWidth;
                     document.addEventListener('mousemove', doDrag);
@@ -364,22 +398,19 @@ class LiveViewer:
             }});
         }}
 
-        
         async function fetchData() {{
             try {{
                 const response = await fetch('data.json?' + new Date().getTime());
                 const data = await response.json();
                 
-                // Handle current row updates
-                if (data.current_row) {{
-                    updateCurrentRow(data.current_row);
+                // Handle current rows updates
+                if (data.current_rows) {{
+                    Object.values(data.current_rows).forEach(currentRow => {{
+                        updateCurrentRow(currentRow);
+                    }});
                 }}
                 
                 // Handle completed rows
-                if (data.completed_row) {{
-                    completeRow(data.completed_row);
-                }}
-                
                 if (data.rows.length > rowCount) {{
                     rowCount = data.rows.length;
                     updateStatus(data.completed);
@@ -388,96 +419,72 @@ class LiveViewer:
                 if (data.completed) {{
                     document.getElementById('statusDot').classList.add('complete');
                     document.getElementById('statusText').textContent = 'Complete';
+                    Object.keys(currentRowElements).forEach(key => {{
+                        if (currentRowElements[key] && currentRowElements[key].parentNode) {{
+                            currentRowElements[key].remove();
+                        }}
+                    }});
+                    currentRowElements = {{}};
                     return;
                 }}
             }} catch (error) {{
                 console.error('Error fetching data:', error);
             }}
             
-            setTimeout(fetchData, 200); // Faster polling for cell updates
+            setTimeout(fetchData, 100);
         }}
         
         function updateCurrentRow(currentRow) {{
             const tbody = document.getElementById('tableBody');
+            const rowIndex = currentRow.index;
             
-            // Remove loading message if present
             if (tbody.children.length === 1 && tbody.children[0].cells.length === {len(columns) + 1}) {{
                 tbody.innerHTML = '';
             }}
             
-            // Create new row element only if we don't have one for this index
-            if (!currentRowElement || parseInt(currentRowElement.dataset.rowIndex) !== currentRow.index) {{
-                currentRowElement = document.createElement('tr');
-                currentRowElement.className = 'new-row';
-                currentRowElement.dataset.rowIndex = currentRow.index;
+            if (!currentRowElements[rowIndex]) {{
+                const rowElement = document.createElement('tr');
+                rowElement.className = 'new-row';
+                rowElement.dataset.rowIndex = rowIndex;
                 
-                // Row number
                 const numCell = document.createElement('td');
                 numCell.className = 'row-number';
-                numCell.textContent = currentRow.index + 1;
-                currentRowElement.appendChild(numCell);
+                numCell.textContent = rowIndex + 1;
+                rowElement.appendChild(numCell);
                 
-                // Create empty cells for all columns
                 {json.dumps(columns)}.forEach(col => {{
                     const td = document.createElement('td');
                     td.className = 'cell-content cell-generating';
                     td.textContent = '...';
-                    td.id = `cell-${{currentRow.index}}-${{col}}`;
-                    currentRowElement.appendChild(td);
+                    td.id = `cell-${{rowIndex}}-${{col}}`;
+                    rowElement.appendChild(td);
                 }});
                 
-                tbody.appendChild(currentRowElement);
+                const existingRows = Array.from(tbody.children);
+                let insertBefore = null;
+                for (let i = 0; i < existingRows.length; i++) {{
+                    const existingIndex = parseInt(existingRows[i].dataset.rowIndex);
+                    if (existingIndex > rowIndex) {{
+                        insertBefore = existingRows[i];
+                        break;
+                    }}
+                }}
+                
+                if (insertBefore) {{
+                    tbody.insertBefore(rowElement, insertBefore);
+                }} else {{
+                    tbody.appendChild(rowElement);
+                }}
+                
+                currentRowElements[rowIndex] = rowElement;
             }}
             
-            // Update cells with values
             Object.entries(currentRow.cells).forEach(([col, value]) => {{
-                const cell = document.getElementById(`cell-${{currentRow.index}}-${{col}}`);
+                const cell = document.getElementById(`cell-${{rowIndex}}-${{col}}`);
                 if (cell) {{
                     cell.textContent = value || '';
                     cell.classList.remove('cell-generating');
                 }}
-            }});
-        }}
-        
-        function completeRow(completedRow) {{
-            // Find the row element and update it with final data
-            const rowElement = document.querySelector(`tr[data-row-index="${{completedRow.index}}"]`);
-            if (rowElement) {{
-                {json.dumps(columns)}.forEach((col, colIndex) => {{
-                    const cell = rowElement.cells[colIndex + 1]; // +1 for row number column
-                    if (cell) {{
-                        cell.textContent = completedRow.data[col] || '';
-                        cell.classList.remove('cell-generating');
-                    }}
-                }});
-            }}
-            
-            // Clear current row if this was it
-            if (currentRowElement && parseInt(currentRowElement.dataset.rowIndex) === completedRow.index) {{
-                currentRowElement = null;
-            }}
-        }}
-        
-        function addRows(rows) {{
-            const tbody = document.getElementById('tableBody');
-            
-            rows.forEach((row, index) => {{
-                const tr = document.createElement('tr');
-                tr.className = 'new-row';
-                
-                const numCell = document.createElement('td');
-                numCell.className = 'row-number';
-                numCell.textContent = rowCount - rows.length + index + 1;
-                tr.appendChild(numCell);
-                
-                {json.dumps(columns)}.forEach(col => {{
-                    const td = document.createElement('td');
-                    td.className = 'cell-content';
-                    td.textContent = row[col] || '';
-                    tr.appendChild(td);
-                }});
-                
-                tbody.appendChild(tr);
             }});
         }}
         
@@ -496,32 +503,23 @@ class LiveViewer:
 </html>"""
 
 
-def create_viewer_callback(viewer: LiveViewer) -> Callable[[Dict[str, Any]], None]:
-    """Create a callback function for dataset generation progress."""
-    def callback(row: Dict[str, Any]):
-        viewer.add_row(row)
-    return callback
-
-
-def generate_with_viewer(
+async def generate_with_viewer(
     dataset_instance,
     n: Optional[int] = None,
-    progress: bool = True,
+    batch_size: int = 5,
     viewer_title: str = "Dataset Generation",
     auto_open: bool = True,
-    stream_delay: float = 0.05,
-    cell_delay: float = 0.3
+    cell_delay: float = 0.1
 ):
-    """Generate dataset with live viewer showing cell-by-cell generation.
+    """Generate dataset with live viewer showing batch generation.
     
     Args:
         dataset_instance: The Dataset instance
         n: Number of samples to generate
-        progress: Show progress bar (ignored when using viewer)
+        batch_size: Number of rows to generate simultaneously
         viewer_title: Title for the HTML viewer
         auto_open: Whether to auto-open browser
-        stream_delay: Delay between rows for streaming effect
-        cell_delay: Delay between individual cell generations
+        cell_delay: Delay between cell generations within a row
     
     Returns:
         pd.DataFrame: Generated dataset
@@ -531,51 +529,90 @@ def generate_with_viewer(
     
     try:
         # Start viewer
-        url = viewer.start(dataset_instance.schema)
+        url = await viewer.start(dataset_instance.schema)
         print(f"Live viewer started at: {url}")
         
-        # Build dependency graph (copied from dataset logic)
+        # Build dependency graph
         dependencies = dataset_instance._build_dependency_graph()
         execution_order = dataset_instance._topological_sort(dependencies)
         
-        # Generate data with live updates
         data = []
         
-        for i in range(num_samples):
-            # Start new row
-            viewer.start_row(i)
+        # Process in batches
+        for batch_start in range(0, num_samples, batch_size):
+            batch_end = min(batch_start + batch_size, num_samples)
+            batch_indices = list(range(batch_start, batch_end))
             
-            row = {}
-            for column in execution_order:
-                # Generate cell value
-                value = dataset_instance._generate_value(column, row)
-                row[column] = value
-                
-                # Update viewer with new cell value
-                viewer.update_cell(column, value)
-                
-                # Delay to show cell generation effect
-                if cell_delay > 0:
-                    time.sleep(cell_delay)
+            # Start all rows in this batch
+            for i in batch_indices:
+                viewer.start_row(i)
             
-            # Complete the row
-            data.append(row)
-            viewer.add_row(row)
+            # Generate batch data concurrently
+            batch_tasks = []
+            for i in batch_indices:
+                task = generate_row_async(i, execution_order, dataset_instance, viewer, cell_delay)
+                batch_tasks.append(task)
             
-            # Small delay between rows
-            if stream_delay > 0:
-                time.sleep(stream_delay)
+            # Wait for all rows in batch to complete
+            batch_results = await asyncio.gather(*batch_tasks)
+            
+            # Add completed rows to data
+            for i, row_data in enumerate(batch_results):
+                row_index = batch_indices[i]
+                data.append(row_data)
+                viewer.complete_row(row_index, row_data)
         
         viewer.complete()
         
-        # Import pandas dynamically to avoid circular imports
+        # Import pandas dynamically
         import pandas as pd
         dataset_instance._data = pd.DataFrame(data)
         return dataset_instance._data
         
     except Exception as e:
-        viewer.stop()
+        await viewer.stop()
         raise e
     finally:
-        # Keep server running for a bit so user can see final state
-        time.sleep(1)
+        await asyncio.sleep(1)
+        await viewer.stop()  # Keep server running briefly
+
+
+async def generate_row_async(row_index: int, execution_order: list, dataset_instance, viewer, cell_delay: float):
+    """Generate a single row asynchronously with live updates."""
+    row = {}
+    
+    for column in execution_order:
+        # Generate cell value
+        value = await generate_value_async(dataset_instance, column, row)
+        row[column] = value
+        
+        # Update viewer
+        viewer.update_cell(row_index, column, value)
+        
+        # Small delay for visual effect
+        if cell_delay > 0:
+            await asyncio.sleep(cell_delay)
+    
+    return row
+
+
+async def generate_value_async(dataset_instance, column: str, context: Dict[str, Any]) -> Any:
+    """Generate a single value asynchronously."""
+    func = dataset_instance.schema[column]
+    
+    # Check if the generator supports async
+    if hasattr(func, 'generate_async'):
+        return await func.generate_async(context)
+    elif hasattr(func, '__call__'):
+        # For non-async functions, run in executor to avoid blocking
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, func, context)
+    else:
+        return func
+
+
+def create_viewer_callback(viewer: LiveViewer) -> Callable[[Dict[str, Any]], None]:
+    """Create a callback function for dataset generation progress."""
+    def callback(row: Dict[str, Any]):
+        viewer.add_row(row)
+    return callback
