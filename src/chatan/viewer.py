@@ -333,9 +333,10 @@ class LiveViewer:
         let rowCount = 0;
         let currentRowElement = null;
 
-        function makeColumnsResizable(table) {
+        function makeColumnsResizable(table) {{
             const headers = table.querySelectorAll('th');
-            headers.forEach((th, index) => {
+            headers.forEach((th, index) => {{
+
                 if (index === headers.length - 1) return;
                 const resizer = document.createElement('div');
                 resizer.className = 'col-resizer';
@@ -343,24 +344,26 @@ class LiveViewer:
 
                 let startX, startWidth;
 
-                resizer.addEventListener('mousedown', (e) => {
+                resizer.addEventListener('mousedown', (e) => {{
+
                     startX = e.clientX;
                     startWidth = th.offsetWidth;
                     document.addEventListener('mousemove', doDrag);
                     document.addEventListener('mouseup', stopDrag);
-                });
+                }});
 
-                function doDrag(e) {
+                function doDrag(e) {{
                     const width = startWidth + e.clientX - startX;
                     th.style.width = width + 'px';
-                }
+                }}
 
-                function stopDrag() {
+                function stopDrag() {{
                     document.removeEventListener('mousemove', doDrag);
                     document.removeEventListener('mouseup', stopDrag);
-                }
-            });
-        }
+                }}
+            }});
+        }}
+
         
         async function fetchData() {{
             try {{
