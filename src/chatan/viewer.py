@@ -216,6 +216,7 @@ class LiveViewer:
         table {{
             width: 100%;
             border-collapse: collapse;
+            table-layout: fixed;
         }}
         
         th {{
@@ -227,6 +228,21 @@ class LiveViewer:
             position: sticky;
             top: 0;
             z-index: 10;
+            position: relative;
+        }}
+
+        th:not(:last-child), td:not(:last-child) {{
+            border-right: 1px solid #e2e8f0;
+        }}
+
+        .col-resizer {{
+            position: absolute;
+            right: 0;
+            top: 0;
+            height: 100%;
+            width: 5px;
+            cursor: col-resize;
+            user-select: none;
         }}
         
         td {{
@@ -253,7 +269,7 @@ class LiveViewer:
         }}
         
         .cell-generating {{
-            background: linear-gradient(90deg, #fef3c7, #fbbf24, #fef3c7);
+            background: linear-gradient(90deg, #f1f5f9, #e2e8f0, #f1f5f9);
             background-size: 200% 200%;
             animation: shimmer 1.5s ease-in-out infinite;
         }}
@@ -316,6 +332,35 @@ class LiveViewer:
     <script>
         let rowCount = 0;
         let currentRowElement = null;
+
+        function makeColumnsResizable(table) {
+            const headers = table.querySelectorAll('th');
+            headers.forEach((th, index) => {
+                if (index === headers.length - 1) return;
+                const resizer = document.createElement('div');
+                resizer.className = 'col-resizer';
+                th.appendChild(resizer);
+
+                let startX, startWidth;
+
+                resizer.addEventListener('mousedown', (e) => {
+                    startX = e.clientX;
+                    startWidth = th.offsetWidth;
+                    document.addEventListener('mousemove', doDrag);
+                    document.addEventListener('mouseup', stopDrag);
+                });
+
+                function doDrag(e) {
+                    const width = startWidth + e.clientX - startX;
+                    th.style.width = width + 'px';
+                }
+
+                function stopDrag() {
+                    document.removeEventListener('mousemove', doDrag);
+                    document.removeEventListener('mouseup', stopDrag);
+                }
+            });
+        }
         
         async function fetchData() {{
             try {{
@@ -441,6 +486,7 @@ class LiveViewer:
             }}
         }}
         
+        makeColumnsResizable(document.querySelector('table'));
         fetchData();
     </script>
 </body>
