@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{TITLE}}</title>
+    <link rel="stylesheet" href="css/styles.css" />
+  </head>
+  <body>
+    <div class="header">
+      <div class="title">{{TITLE}}</div>
+      <div class="status">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Generating...</span>
+        <span id="rowCount">0 rows</span>
+      </div>
+    </div>
+
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th class="row-number">#</th>
+            <th class="column-header" id="column-headers">
+              <!-- Column headers will be populated by JavaScript -->
+            </th>
+          </tr>
+        </thead>
+        <tbody id="tableBody">
+          <tr>
+            <td colspan="100%" class="loading">Waiting for data...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Edit Column Modal -->
+    <div id="editModal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <span class="modal-title"
+            >Edit Column: <span id="editColumnName"></span
+          ></span>
+          <span class="close">&times;</span>
+        </div>
+        <div id="editForm">
+          <!-- Form content will be populated by JavaScript -->
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-secondary" onclick="closeEditModal()">
+            Cancel
+          </button>
+          <button class="btn btn-primary" onclick="saveChanges()">
+            Save & Regenerate
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script src="js/app.js"></script>
+    <script src="js/modal.js"></script>
+    <script src="js/table.js"></script>
+  </body>
+</html>
