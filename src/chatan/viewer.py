@@ -336,6 +336,7 @@ class LiveViewer:
         function makeColumnsResizable(table) {{
             const headers = table.querySelectorAll('th');
             headers.forEach((th, index) => {{
+
                 if (index === headers.length - 1) return;
                 const resizer = document.createElement('div');
                 resizer.className = 'col-resizer';
@@ -344,6 +345,7 @@ class LiveViewer:
                 let startX, startWidth;
 
                 resizer.addEventListener('mousedown', (e) => {{
+
                     startX = e.clientX;
                     startWidth = th.offsetWidth;
                     document.addEventListener('mousemove', doDrag);
@@ -361,6 +363,7 @@ class LiveViewer:
                 }}
             }});
         }}
+
         
         async function fetchData() {{
             try {{
