@@ -4,6 +4,10 @@ Evaluators
 Evaluation helpers let you score generated data. Metrics can run inline as
 columns are produced or over the entire dataset after generation.
 
+Available evaluation functions
+------------------------------
+Current helpers include exact match, semantic similarity, BLEU score, normalized edit distance and an LLM-as-a-judge metric.
+
 Inline evaluation
 -----------------
 Add evaluation functions directly to the dataset schema. Each row will include a

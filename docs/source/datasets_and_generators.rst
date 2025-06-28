@@ -5,6 +5,15 @@ Chatan builds datasets from two simple concepts. **Generators** call large
 language models while **samplers** create structured values. Together they form
 the schema for a ``Dataset``.
 
+Supported generator providers
+-----------------------------
+Chatan includes built-in clients for a few common model sources:
+
+* ``openai`` - access GPT models via the OpenAI API
+* ``anthropic`` - use Claude models from Anthropic
+* ``transformers``/``huggingface`` - run local HuggingFace models with ``transformers``
+
+
 Basic QA Dataset
 ----------------
 A minimal dataset uses a single generator to create questions and answers.
