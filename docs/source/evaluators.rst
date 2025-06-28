@@ -1,13 +1,13 @@
-Evaluation
+Evaluators
 ==========
 
-Chatan includes helpers for evaluating generated data. Metrics can be computed
-while rows are created or aggregated afterwards.
+Evaluation helpers let you score generated data. Metrics can run inline as
+columns are produced or over the entire dataset after generation.
 
 Inline evaluation
 -----------------
-Add evaluation functions directly in the dataset schema. The resulting column
-contains the score for each row.
+Add evaluation functions directly to the dataset schema. Each row will include a
+score column.
 
 .. code-block:: python
 
@@ -24,8 +24,8 @@ contains the score for each row.
 
 Aggregate evaluation
 --------------------
-Compute metrics across the dataset using ``Dataset.evaluate`` and the
-``Dataset.eval`` helper.
+Metrics can also be aggregated across the whole dataset using
+``Dataset.evaluate``.
 
 .. code-block:: python
 
@@ -36,7 +36,7 @@ Compute metrics across the dataset using ``Dataset.evaluate`` and the
 
 Comparing variations
 --------------------
-Evaluate multiple columns—useful for comparing different prompts or models.
+Evaluate multiple columns at once to compare prompts or models.
 
 .. code-block:: python
 
@@ -54,6 +54,6 @@ Evaluate multiple columns—useful for comparing different prompts or models.
 
 Supported metrics
 -----------------
-The ``evaluate`` module provides metrics such as exact match, semantic similarity,
-BLEU score, edit distance and an LLM-as-a-judge metric. Access them through
-``ds.eval`` for aggregate evaluation or ``eval`` for inline use.
+The ``evaluate`` module provides helpers such as exact match, semantic
+similarity, BLEU score, edit distance and an LLM-as-a-judge metric. Access them
+through ``ds.eval`` for aggregate evaluation or ``eval`` for inline use.

@@ -43,23 +43,37 @@ Basic Usage
       # Save to file
       ds.save("my_dataset.parquet")
 
-Core Concepts
--------------
+Basic Evaluation
+----------------
+You can measure quality while you generate data or after rows are produced.
 
-**Generators**
-   Use LLMs to create text content. Support OpenAI and Anthropic APIs.
+Inline evaluation
+^^^^^^^^^^^^^^^^^
 
-**Samplers** 
-   Create structured data like UUIDs, choices, ranges, dates.
+.. code-block:: python
 
-**Schemas**
-   Define relationships between columns using generators and samplers.
+   from chatan import dataset, eval, sample
 
-**Dependencies**
-   Columns can reference other columns using ``{column_name}`` syntax.
+   ds = dataset({
+       "col1": sample.choice(["a", "a", "b"]),
+       "col2": "b",
+       "exact_match": eval.exact_match("col1", "col2")
+   }, n=100)
+
+   df = ds.generate()
+
+Aggregate evaluation
+^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   aggregate = ds.evaluate({
+       "exact_match": ds.eval.exact_match("col1", "col2"),
+   })
+   print(aggregate)
 
 Next Steps
 ----------
 
-- Check out :doc:`examples` for more complex use cases
+ - Check out :doc:`datasets_and_generators` for more complex use cases
 - Browse the :doc:`api` reference for all available functions
