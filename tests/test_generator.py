@@ -142,7 +142,7 @@ class TestAnthropicGenerator:
 class TestTransformersGenerator:
     """Test local HuggingFace/transformers generator."""
 
-    @patch('transformers.pipeline')
+    @patch('chatan.generator.pipeline')
     def test_generate_basic(self, mock_pipeline):
         mock_func = Mock()
         mock_func.return_value = [{"generated_text": " Hello "}]
@@ -319,7 +319,7 @@ class TestIntegration:
         assert result2 == "Response"
         assert mock_client.chat.completions.create.call_count == 2
 
-    @patch('transformers.pipeline')
+    @patch('chatan.generator.pipeline')
     def test_end_to_end_transformers(self, mock_pipeline):
         """Test complete Transformers generation pipeline."""
         mock_func = Mock()
