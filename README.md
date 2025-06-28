@@ -68,6 +68,25 @@ ds = dataset({
 
 ```
 
+## Evaluation
+
+Evaluate rows inline or compute aggregate metrics:
+
+```python
+from chatan import dataset, eval, sample
+
+ds = dataset({
+    "col1": sample.choice(["a", "a", "b"]),
+    "col2": "b",
+    "score": eval.exact_match("col1", "col2")
+})
+
+df = ds.generate()
+aggregate = ds.evaluate({
+    "exact_match": ds.eval.exact_match("col1", "col2")
+})
+```
+
 ## Citation
 
 If you use this code in your research, please cite:
