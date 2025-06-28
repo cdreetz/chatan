@@ -6,6 +6,7 @@ from datasets import Dataset as HFDataset
 from tqdm import tqdm
 from .generator import GeneratorFunction
 from .sampler import SampleFunction
+from .evaluate import DatasetEvaluator, EvaluationFunction
 
 
 class Dataset:
@@ -27,6 +28,32 @@ class Dataset:
         self.schema = schema
         self.n = n
         self._data = None
+
+    @property
+    def eval(self):
+        """Get dataset evaluator for method chaining."""
+        if self._data is None:
+            raise ValueError("Dataset must be generated before evaluation")
+        return DatasetEvaluator(self)
+
+    def evaluate(self, eval_schema: Dict[str, EvaluationFunction]) -> Dict[str, float]:
+        """
+        Evaluate multiple metrics on this dataset.
+
+        Args:
+            eval_schema: Dictionary mapping metric names to evaluation function.
+
+        Returns:
+            Dictionary of metric names to computed scores
+        """
+        if self._data is None:
+            self.generate()
+
+        results = {}
+        for name, eval_function in eval_schema.items():
+            results[name] = eval_function(self._data)
+        return results
+
     
     def generate(
         self, n: Optional[int] = None, progress: bool = True
