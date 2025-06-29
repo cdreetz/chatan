@@ -60,7 +60,8 @@ class AnthropicGenerator(BaseGenerator):
 class TransformersGenerator(BaseGenerator):
     """Local HuggingFace/transformers generator."""
 
-    def __init__(self, model: str = "gpt2", **kwargs):
+    def __init__(self, model: str, **kwargs):
+        self.model_name = model
         self.pipeline = pipeline("text-generation", model=model, **kwargs)
 
     def generate(self, prompt: str, **kwargs) -> str:
@@ -97,18 +98,32 @@ class GeneratorClient:
 
     def __init__(self, provider: str, api_key: Optional[str] = None, **kwargs):
         provider_lower = provider.lower()
-        if provider_lower == "openai":
-            if api_key is None:
-                raise ValueError("API key is required for OpenAI")
-            self._generator = OpenAIGenerator(api_key, **kwargs)
-        elif provider_lower == "anthropic":
-            if api_key is None:
-                raise ValueError("API key is required for Anthropic")
-            self._generator = AnthropicGenerator(api_key, **kwargs)
-        elif provider_lower in {"huggingface", "transformers", "hf"}:
-            self._generator = TransformersGenerator(**kwargs)
-        else:
-            raise ValueError(f"Unsupported provider: {provider}")
+        try:
+            if provider_lower == "openai":
+                if api_key is None:
+                    raise ValueError("API key is required for OpenAI")
+                self._generator = OpenAIGenerator(api_key, **kwargs)
+            elif provider_lower == "anthropic":
+                if api_key is None:
+                    raise ValueError("API key is required for Anthropic")
+                self._generator = AnthropicGenerator(api_key, **kwargs)
+            elif provider_lower in {"huggingface", "transformers", "hf"}:
+                if "model" not in kwargs:
+                    raise ValueError(
+                        "Model is required for transformers provider. "
+                        "Example: generator('transformers', model='Qwen2.5-1.5B-Instruct')"
+                    )
+                self._generator = TransformersGenerator(**kwargs)
+            else:
+                raise ValueError(f"Unsupported provider: {provider}")
+        except Exception as e:
+            if not isinstance(e, (ValueError, RuntimeError)) or "Failed to load model" not in str(e):
+                raise ValueError(
+                    f"Failed to initialize generator for provider '{provider}'. "
+                    f"Check your configuration and try again. Original error: {str(e)}"
+                ) from e
+            else:
+                raise
     
     def __call__(self, prompt_template: str, **variables) -> GeneratorFunction:
         """Create a generator function.
