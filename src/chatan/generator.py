@@ -126,7 +126,7 @@ class TransformersGenerator(BaseGenerator):
                 prompt,
                 return_tensors="pt",
                 padding=True,
-                trunctation=True,
+                truncation=True,
                 max_length=2048
             )
 
