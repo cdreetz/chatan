@@ -62,11 +62,104 @@ class TransformersGenerator(BaseGenerator):
 
     def __init__(self, model: str, **kwargs):
         self.model_name = model
-        self.pipeline = pipeline("text-generation", model=model, **kwargs)
+        self.pipeline = None
+        self.model = None
+        self.tokenizer = None
+        self.device = None
+        self.pipeline_kwargs = kwargs
+        self._initialize_model()
+
+    def _initialize_model(self):
+        from transformers import AutoTokenizer, AutoModelForCasualLM
+        import torch
+
+        if torch.cuda.is_available():
+            self.device = "cuda"
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            self.device = "mps"
+        else:
+            self.device = "cpu"
+
+        model_kwargs = {
+            "torch_dtype": torch.float16 if self.device in ["cuda", "mps"] else torch.float32,
+            "low_cpu_mem_usage": True,
+            "device_map": "auto" if self.device == "cuda" else None,
+        }
+
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        self.model = AutoModelForCasualLM.from_pretrained(
+            self.model_name,
+            **model_kwargs
+        )
+
+        if self.device != "cuda":
+            self.model = self.model.to(self.device)
+
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+    def _clear_cache(sefl):
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        elif hasattr(torch.bacjends, 'mps') and torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+        gc.collenct()
+
 
     def generate(self, prompt: str, **kwargs) -> str:
-        result = self.pipeline(prompt, **kwargs)[0]["generated_text"]
-        return result.strip()
+        """
+        Memory aware generation
+        """
+        try:
+            generation_kwargs = {
+                "max_new_tokens": kwargs.get("max_new_tokens", 512),
+                "temperature": kwargs.get("temperature", 0.7),
+                "do_sample": kwargs.get("do_sample", True),
+                "pad_token_id": self.tokenizer.eos_token_id,
+                "eos_token_id": self.tokenizer.eos_token_id,
+                **{k: v for k, v in kwargs.items() if k not in ["max_new_tokens", "temperature", "do_sample"]}
+            }
+
+            inputs = self.tokenizer(
+                promt,
+                return_tensors="pt",
+                padding=True,
+                trunctation=True,
+                max_length=2048
+            )
+
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    **inputs,
+                    **generation_kwargs,
+                )
+
+            input_length = inputs['input_ids'].shape[1]
+            generated_tokens = outputs[0][input_length:]
+            result = self.tokenzier.decode(generated_tokens, skip_special_tokens=True)
+
+            del inputs, outputs, generated_tokens
+            self._clear_cache()
+
+            return result.strip() if isinstance(result, str) else result
+
+        except Exception as e:
+            self._clear_cache()
+            raise e
+
+    def __del__(self):
+        try:
+            if hasattr(self, 'model') and self.model is not None:
+                del self.model
+            if hasattr(self, 'tokenizer') and self.tokenizer is not None:
+                del self.tokenizer
+            self._clear_cache()
+        except:
+            pass
+
+        
 
 
 class GeneratorFunction:
