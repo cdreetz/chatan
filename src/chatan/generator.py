@@ -100,7 +100,7 @@ class TransformersGenerator(BaseGenerator):
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-    def _clear_cache(sefl):
+    def _clear_cache(self):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
@@ -140,7 +140,7 @@ class TransformersGenerator(BaseGenerator):
 
             input_length = inputs['input_ids'].shape[1]
             generated_tokens = outputs[0][input_length:]
-            result = self.tokenzier.decode(generated_tokens, skip_special_tokens=True)
+            result = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
 
             del inputs, outputs, generated_tokens
             self._clear_cache()
