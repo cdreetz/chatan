@@ -1,15 +1,17 @@
 """LLM generators with CPU fallback and aggressive memory management."""
 
-from typing import Dict, Any, Optional, Union, List
-import openai
-import anthropic
-from abc import ABC, abstractmethod
 import gc
 import os
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional, Union
+
+import anthropic
+import openai
 
 try:
     import torch
-    from transformers import AutoTokenizer, AutoModelForCausalLM
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
     TRANSFORMERS_AVAILALBE = True
 except ImportError:
     TRANSFORMERS_AVAILALBE = False
@@ -17,7 +19,7 @@ except ImportError:
 
 class BaseGenerator(ABC):
     """Base class for LLM generators."""
-    
+
     @abstractmethod
     def generate(self, prompt: str, **kwargs) -> str:
         """Generate content from a prompt."""
@@ -26,41 +28,41 @@ class BaseGenerator(ABC):
 
 class OpenAIGenerator(BaseGenerator):
     """OpenAI GPT generator."""
-    
+
     def __init__(self, api_key: str, model: str = "gpt-3.5-turbo", **kwargs):
         self.client = openai.OpenAI(api_key=api_key)
         self.model = model
         self.default_kwargs = kwargs
-    
+
     def generate(self, prompt: str, **kwargs) -> str:
         """Generate content using OpenAI API."""
         merged_kwargs = {**self.default_kwargs, **kwargs}
-        
+
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
-            **merged_kwargs
+            **merged_kwargs,
         )
         return response.choices[0].message.content.strip()
 
 
 class AnthropicGenerator(BaseGenerator):
     """Anthropic Claude generator."""
-    
+
     def __init__(self, api_key: str, model: str = "claude-3-sonnet-20240229", **kwargs):
         self.client = anthropic.Anthropic(api_key=api_key)
         self.model = model
         self.default_kwargs = kwargs
-    
+
     def generate(self, prompt: str, **kwargs) -> str:
         """Generate content using Anthropic API."""
         merged_kwargs = {**self.default_kwargs, **kwargs}
-        
+
         response = self.client.messages.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=merged_kwargs.pop("max_tokens", 1000),
-            **merged_kwargs
+            **merged_kwargs,
         )
         return response.content[0].text.strip()
 
@@ -100,17 +102,16 @@ class TransformersGenerator(BaseGenerator):
         }
 
         print(f"Loading {self.model_name} on {self.device}...")
-        
+
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_name,
-            **model_kwargs
+            self.model_name, **model_kwargs
         )
-        
+
         # Add pad token if missing
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-            
+
         print(f"Model loaded successfully on {self.device}")
 
     def _clear_cache(self):
@@ -121,7 +122,9 @@ class TransformersGenerator(BaseGenerator):
             try:
                 torch.mps.empty_cache()
             except Exception as e:
-                print(f"Failed to clear MPS cache: {e}")  # Log the error instead of ignoring
+                print(
+                    f"Failed to clear MPS cache: {e}"
+                )  # Log the error instead of ignoring
         gc.collect()
 
     def generate(self, prompt: str, **kwargs) -> str:
@@ -140,18 +143,15 @@ class TransformersGenerator(BaseGenerator):
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=2048
+                max_length=2048,
             )
 
             # Generate
             with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    **generation_kwargs
-                )
+                outputs = self.model.generate(**inputs, **generation_kwargs)
 
             # Extract new tokens
-            input_length = inputs['input_ids'].shape[1]
+            input_length = inputs["input_ids"].shape[1]
             generated_tokens = outputs[0][input_length:]
             result = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
 
@@ -169,9 +169,9 @@ class TransformersGenerator(BaseGenerator):
     def __del__(self):
         """Cleanup when destroyed."""
         try:
-            if hasattr(self, 'model') and self.model is not None:
+            if hasattr(self, "model") and self.model is not None:
                 del self.model
-            if hasattr(self, 'tokenizer') and self.tokenizer is not None:
+            if hasattr(self, "tokenizer") and self.tokenizer is not None:
                 del self.tokenizer
             self._clear_cache()
         except:
@@ -236,21 +236,25 @@ class GeneratorClient:
             raise
 
         except Exception as e:
-            if not isinstance(e, (ValueError, RuntimeError)) or "Failed to load model" not in str(e):
+            if not isinstance(
+                e, (ValueError, RuntimeError)
+            ) or "Failed to load model" not in str(e):
                 raise ValueError(
                     f"Failed to initialize generator for provider '{provider}'. "
                     f"Check your configuration and try again. Original error: {str(e)}"
                 ) from e
             else:
                 raise
-    
+
     def __call__(self, prompt_template: str, **variables) -> GeneratorFunction:
         """Create a generator function."""
         return GeneratorFunction(self._generator, prompt_template, variables)
 
 
 # Factory function
-def generator(provider: str = "openai", api_key: Optional[str] = None, **kwargs) -> GeneratorClient:
+def generator(
+    provider: str = "openai", api_key: Optional[str] = None, **kwargs
+) -> GeneratorClient:
     """Create a generator client."""
     if provider.lower() in {"openai", "anthropic"} and api_key is None:
         raise ValueError("API key is required")
