@@ -93,21 +93,28 @@ class TestSemanticSimilarityEvaluator:
     """Test SemanticSimilarityEvaluator functionality."""
 
     @pytest.mark.skipif(
-        'sentence_transformers' not in sys.modules and 
+        'sentence_transformers' not in sys.modules and
         'sklearn' not in sys.modules,
         reason="sentence-transformers and sklearn not available"
     )
     @patch('sentence_transformers.SentenceTransformer')
-    @patch('sklearn.metrics.pairwise.cosine_similarity')
+    @patch('chatan.evaluate.cosine_similarity')
     def test_semantic_similarity_basic(self, mock_cosine, mock_transformer):
         """Test basic semantic similarity computation."""
         # Mock the transformer
         mock_model = Mock()
-        mock_model.encode.return_value = np.array([[1, 0], [0, 1]])
+        # Mock encode to return different embeddings for predictions and targets
+        mock_model.encode.side_effect = [
+            np.array([[1, 0], [0, 1]]),  # predictions embeddings
+            np.array([[0.8, 0.6], [0.9, 0.4]])  # targets embeddings
+        ]
         mock_transformer.return_value = mock_model
         
-        # Mock cosine similarity
-        mock_cosine.side_effect = [[[0.8]], [[0.9]]]
+        # Mock cosine similarity to return specific values for each call
+        mock_cosine.side_effect = [
+            np.array([[0.8]]),  # First call
+            np.array([[0.9]])   # Second call
+        ]
         
         evaluator = SemanticSimilarityEvaluator()
         predictions = ["hello world", "good morning"]
@@ -118,10 +125,9 @@ class TestSemanticSimilarityEvaluator:
 
     def test_missing_dependency_error(self):
         """Test error when sentence-transformers not installed."""
-        with patch.dict('sys.modules', {'sentence_transformers': None}):
-            evaluator = SemanticSimilarityEvaluator()
-            with pytest.raises(ImportError, match="sentence-transformers is required"):
-                evaluator.compute(["test"], ["test"])
+        with patch('chatan.evaluate.SEMANTIC_SIMILARITY_AVAILABLE', False):
+            with pytest.raises(ImportError, match="Semantic similarity evaluation requires additional dependencies"):
+                evaluator = SemanticSimilarityEvaluator()
 
     @patch('sentence_transformers.SentenceTransformer')
     def test_custom_model(self, mock_transformer):
@@ -140,7 +146,7 @@ class TestSemanticSimilarityEvaluator:
         mock_model.encode.return_value = np.array([[1, 0]])
         mock_transformer.return_value = mock_model
         
-        with patch('sklearn.metrics.pairwise.cosine_similarity', return_value=[[0.8]]):
+        with patch('chatan.evaluate.cosine_similarity', return_value=[[0.8]]):
             evaluator.compute(["test"], ["test"])
         
         assert evaluator._model is not None
@@ -149,14 +155,14 @@ class TestSemanticSimilarityEvaluator:
 class TestBLEUEvaluator:
     """Test BLEUEvaluator functionality."""
 
-    @patch('nltk.translate.bleu_score.sentence_bleu')
-    @patch('nltk.tokenize.word_tokenize')
+    @patch('chatan.evaluate.word_tokenize')
+    @patch('chatan.evaluate.sentence_bleu')
     @patch('nltk.download')
     @patch('nltk.data.find')
-    def test_bleu_score_basic(self, mock_find, mock_download, mock_tokenize, mock_bleu):
+    def test_bleu_score_basic(self, mock_find, mock_download, mock_bleu, mock_tokenize):
         """Test basic BLEU score computation."""
         # Mock NLTK components
-        mock_find.side_effect = LookupError()  # Trigger download
+        mock_find.return_value = "mock_path"  # Don't trigger download
         mock_tokenize.side_effect = [
             ["hello", "world"], ["hello", "world"],
             ["good", "morning"], ["good", "morning"]
@@ -169,20 +175,25 @@ class TestBLEUEvaluator:
         
         score = evaluator.compute(predictions, targets)
         assert score == pytest.approx(0.85)  # (0.8 + 0.9) / 2
+        
+        # Verify the mocks were called correctly
+        assert mock_bleu.call_count == 2
 
     def test_missing_nltk_error(self):
         """Test error when NLTK not installed."""
-        with patch.dict('sys.modules', {'nltk': None}):
-            evaluator = BLEUEvaluator()
-            with pytest.raises(ImportError, match="nltk is required"):
+        with patch('chatan.evaluate.NLTK_AVAILABLE', False):
+            with pytest.raises(ImportError, match="BLEU score evaluation requires additional dependencies"):
+                evaluator = BLEUEvaluator()
+                # Force the error by calling compute
                 evaluator.compute(["test"], ["test"])
 
+    @patch('chatan.evaluate.word_tokenize')
     @patch('nltk.translate.bleu_score.sentence_bleu')
-    @patch('nltk.tokenize.word_tokenize')
     @patch('nltk.download')
     @patch('nltk.data.find')
-    def test_empty_tokens_handling(self, mock_find, mock_download, mock_tokenize, mock_bleu):
+    def test_empty_tokens_handling(self, mock_find, mock_download, mock_bleu, mock_tokenize):
         """Test handling of empty tokenization."""
+        mock_find.return_value = "mock_path"  # Don't trigger download
         mock_tokenize.side_effect = [[], ["word"], ["word"], []]
         
         evaluator = BLEUEvaluator()

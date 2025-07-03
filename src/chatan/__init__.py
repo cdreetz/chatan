@@ -1,6 +1,6 @@
 """Minos: Create synthetic datasets with LLM generators and samplers."""
 
-__version__ = "0.1.3"
+__version__ = "0.2.0"
 
 from .dataset import dataset
 from .generator import generator

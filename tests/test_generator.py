@@ -2,6 +2,7 @@
 
 import pytest
 from unittest.mock import Mock, patch, MagicMock
+import torch
 from chatan.generator import (
     OpenAIGenerator,
     AnthropicGenerator,

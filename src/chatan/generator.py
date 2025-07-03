@@ -4,9 +4,15 @@ from typing import Dict, Any, Optional, Union, List
 import openai
 import anthropic
 from abc import ABC, abstractmethod
-import torch
 import gc
 import os
+
+try:
+    import torch
+    from transformers import AutoTokenizer, AutoModelForCausalLM
+    TRANSFORMERS_AVAILALBE = True
+except ImportError:
+    TRANSFORMERS_AVAILALBE = False
 
 
 class BaseGenerator(ABC):
@@ -63,6 +69,12 @@ class TransformersGenerator(BaseGenerator):
     """Local HuggingFace/transformers generator with aggressive memory management."""
 
     def __init__(self, model: str, force_cpu: bool = False, **kwargs):
+        if not TRANSFORMERS_AVAILALBE:
+            raise ImportError(
+                "Transformers and PyTorch are required for local model generation. "
+                "Install with: pip install chatan[local]"
+            )
+
         self.model_name = model
         self.force_cpu = force_cpu
         self.model = None
@@ -73,21 +85,21 @@ class TransformersGenerator(BaseGenerator):
 
     def _initialize_model(self):
         """Initialize model - force CPU to avoid MPS tensor size bug."""
-        from transformers import AutoTokenizer, AutoModelForCausalLM
-        import torch
-        
-        # Force CPU - MPS has a known bug with large tensor allocations
-        self.device = "cpu"
-        print("Using CPU to avoid MPS tensor allocation bug (not a memory issue)")
 
-        # Optimized settings for CPU with 16GB RAM
+        if torch.cuda.is_available():
+            self.device = "cuda"
+            self.dtype = torch.float16
+        else:
+            self.device = "cpu"
+            self.dtype = torch.float32
+
         model_kwargs = {
-            "torch_dtype": torch.float32,
+            "torch_dtype": self.dtype,
             "low_cpu_mem_usage": True,
             "trust_remote_code": True,
         }
 
-        print(f"Loading {self.model_name} on CPU...")
+        print(f"Loading {self.model_name} on {self.device}...")
         
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.model = AutoModelForCausalLM.from_pretrained(
@@ -99,23 +111,22 @@ class TransformersGenerator(BaseGenerator):
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
             
-        print(f"Model loaded successfully on CPU")
+        print(f"Model loaded successfully on {self.device}")
 
     def _clear_cache(self):
         """Clear all possible caches."""
-        if torch.cuda.is_available():
+        if self.device == "cuda":
             torch.cuda.empty_cache()
-        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        elif self.device == "mps":
             try:
                 torch.mps.empty_cache()
-            except:
-                pass  # Ignore MPS cache clearing errors
+            except Exception as e:
+                print(f"Failed to clear MPS cache: {e}")  # Log the error instead of ignoring
         gc.collect()
 
     def generate(self, prompt: str, **kwargs) -> str:
         """Generate content - optimized for CPU with 16GB RAM."""
         try:
-            # Reasonable settings for 1.5B model on 16GB
             generation_kwargs = {
                 "max_new_tokens": kwargs.get("max_new_tokens", 512),
                 "temperature": kwargs.get("temperature", 0.7),
@@ -211,10 +222,19 @@ class GeneratorClient:
                         "Model is required for transformers provider. "
                         "Example: generator('transformers', model='Qwen2.5-1.5B-Instruct')"
                     )
-                # Remove the auto CPU forcing - let user decide
                 self._generator = TransformersGenerator(**kwargs)
             else:
                 raise ValueError(f"Unsupported provider: {provider}")
+
+        except ImportError as e:
+            if "transformers" in str(e) or "PyTorch" in str(e):
+                raise ImportError(
+                    f"Local model support requires additional dependencies. "
+                    f"Install with: pip install chatan[local]\n"
+                    f"Original error: {str(e)}"
+                ) from e
+            raise
+
         except Exception as e:
             if not isinstance(e, (ValueError, RuntimeError)) or "Failed to load model" not in str(e):
                 raise ValueError(

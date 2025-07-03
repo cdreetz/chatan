@@ -5,6 +5,22 @@ import numpy as np
 import pandas as pd
 from abc import ABC, abstractmethod
 
+try:
+    from sentence_transformers import SentenceTransformer
+    from sklearn.metrics.pairwise import cosine_similarity
+    SEMANTIC_SIMILARITY_AVAILABLE = True
+except ImportError:
+    SEMANTIC_SIMILARITY_AVAILABLE = False
+
+try:
+    import nltk
+    from nltk.translate.bleu_score import sentence_bleu
+    from nltk.tokenize import word_tokenize
+    NLTK_AVAILABLE = True
+except ImportError:
+    NLTK_AVAILABLE = False
+
+
 
 class BaseEvaluator(ABC):
     """Base class for evaluation metrics."""
@@ -31,20 +47,18 @@ class SemanticSimilarityEvaluator(BaseEvaluator):
     """Semantic similarity evaluator using sentence transformers."""
     
     def __init__(self, model: str = "all-MiniLM-L6-v2"):
+        if not SEMANTIC_SIMILARITY_AVAILABLE:
+            raise ImportError(
+                "Semantic similarity evaluation requires additional dependencies. "
+                "Install with: pip install chatan[eval]"
+            )
         self.model_name = model
         self._model = None
     
     def _load_model(self):
         """Lazy load the sentence transformer model."""
         if self._model is None:
-            try:
-                from sentence_transformers import SentenceTransformer
-                self._model = SentenceTransformer(self.model_name)
-            except ImportError:
-                raise ImportError(
-                    "sentence-transformers is required for semantic similarity. "
-                    "Install with: pip install sentence-transformers"
-                )
+            self._model = SentenceTransformer(self.model_name)
     
     def compute(self, predictions: List[str], targets: List[str], **kwargs) -> float:
         """Compute mean cosine similarity between predictions and targets."""
@@ -57,7 +71,6 @@ class SemanticSimilarityEvaluator(BaseEvaluator):
         target_embeddings = self._model.encode(targets)
         
         # Compute cosine similarities
-        from sklearn.metrics.pairwise import cosine_similarity
         similarities = []
         for pred_emb, target_emb in zip(pred_embeddings, target_embeddings):
             sim = cosine_similarity([pred_emb], [target_emb])[0][0]
@@ -71,22 +84,17 @@ class BLEUEvaluator(BaseEvaluator):
     
     def compute(self, predictions: List[str], targets: List[str], **kwargs) -> float:
         """Compute BLEU score."""
-        try:
-            from nltk.translate.bleu_score import sentence_bleu
-            from nltk.tokenize import word_tokenize
-            import nltk
-            
-            # Download required NLTK data
-            try:
-                nltk.data.find('tokenizers/punkt')
-            except LookupError:
-                nltk.download('punkt', quiet=True)
-                
-        except ImportError:
+
+        if not NLTK_AVAILABLE:
             raise ImportError(
-                "nltk is required for BLEU score. "
-                "Install with: pip install nltk"
+                "BLEU score evaluation requires additional dependencies. "
+                "Install with: pip install chatan[eval]"
             )
+
+        try:
+            nltk.data.find('tokenizers/punkt')
+        except LookupError:
+                nltk.download('punkt', quiet=True)
         
         if len(predictions) != len(targets):
             raise ValueError("Predictions and targets must have same length")
