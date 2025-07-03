@@ -5,6 +5,8 @@ import openai
 import anthropic
 from transformers import pipeline
 from abc import ABC, abstractmethod
+import torch
+import gc
 
 
 class BaseGenerator(ABC):
