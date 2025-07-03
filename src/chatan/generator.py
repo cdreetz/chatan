@@ -121,7 +121,7 @@ class TransformersGenerator(BaseGenerator):
             }
 
             inputs = self.tokenizer(
-                promt,
+                prompt,
                 return_tensors="pt",
                 padding=True,
                 trunctation=True,
