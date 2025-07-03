@@ -1,16 +1,29 @@
 # Chatan
 
-Create diverse, synthetic datasets. Start from scratch or augment an existing dataset. Simple define your dataset schema as a set of generators, typically being LLMs with a prompt describing what kind of examples you want.
+Create diverse, synthetic datasets. Start from scratch or augment an existing dataset. Simply define your dataset schema as a set of generators, typically being LLMs with a prompt describing what kind of examples you want.
 
 ## Installation
 
-```
+Basic installation (includes OpenAI, Anthropic, and core functionality):
+```bash
 pip install chatan
+```
+
+With optional features:
+```bash
+# For local model support (transformers + PyTorch)
+pip install chatan[local]
+
+# For advanced evaluation features (semantic similarity, BLEU score)
+pip install chatan[eval]
+
+# For all optional features
+pip install chatan[all]
 ```
 
 ## Getting Started
 
-```
+```python
 import chatan
 
 # Create a generator
@@ -27,11 +40,28 @@ ds = chatan.dataset({
 df = ds.generate(n=10)
 ```
 
+## Generator Options
+
+### API-based Generators (included in base install)
+```python
+# OpenAI
+gen = chatan.generator("openai", "YOUR_OPENAI_API_KEY")
+
+# Anthropic
+gen = chatan.generator("anthropic", "YOUR_ANTHROPIC_API_KEY")
+```
+
+### Local Model Support (requires `pip install chatan[local]`)
+```python
+# HuggingFace Transformers
+gen = chatan.generator("transformers", model="microsoft/DialoGPT-medium")
+```
+
 ## Examples
 
 Create Data Mixes
 
-```
+```python
 from chatan import dataset, generator, sample
 import uuid
 
@@ -53,7 +83,7 @@ ds = dataset({
 
 Augment datasets
 
-```
+```python
 from chatan import generator, dataset, sample
 from datasets import load_dataset
 
@@ -65,7 +95,6 @@ ds = dataset({
     "variation": gen("rewrite this prompt: {original_prompt}"),
     "response": gen("respond to: {variation}")
 })
-
 ```
 
 ## Evaluation
@@ -86,6 +115,28 @@ aggregate = ds.evaluate({
     "exact_match": ds.eval.exact_match("col1", "col2")
 })
 ```
+
+### Advanced Evaluation (requires `pip install chatan[eval]`)
+```python
+# Semantic similarity using sentence transformers
+aggregate = ds.evaluate({
+    "semantic_sim": ds.eval.semantic_similarity("col1", "col2")
+})
+
+# BLEU score evaluation
+aggregate = ds.evaluate({
+    "bleu": ds.eval.bleu_score("col1", "col2")
+})
+```
+
+## Installation Options Summary
+
+| Feature | Install Command | What's Included |
+|---------|----------------|-----------------|
+| **Basic** | `pip install chatan` | OpenAI, Anthropic, core sampling, basic evaluation |
+| **Local Models** | `pip install chatan[local]` | + HuggingFace Transformers, PyTorch |
+| **Advanced Eval** | `pip install chatan[eval]` | + Semantic similarity, BLEU scores, NLTK |
+| **Everything** | `pip install chatan[all]` | All features above |
 
 ## Citation
 

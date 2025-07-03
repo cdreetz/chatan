@@ -1,20 +1,20 @@
 """Live HTML viewer for dataset generation."""
 
+import atexit
 import json
 import os
 import tempfile
-import webbrowser
-from pathlib import Path
-from typing import Dict, Any, Optional, Callable
 import threading
 import time
+import webbrowser
 from http.server import HTTPServer, SimpleHTTPRequestHandler
-import atexit
+from pathlib import Path
+from typing import Any, Callable, Dict, Optional
 
 
 class LiveViewer:
     """Live HTML viewer for streaming dataset generation results."""
-    
+
     def __init__(self, title: str = "Dataset Generation", auto_open: bool = True):
         self.title = title
         self.auto_open = auto_open
@@ -25,112 +25,112 @@ class LiveViewer:
         self.server_thread = None
         self.port = 8000
         self._active = False
-        
+
     def start(self, schema: Dict[str, Any]) -> str:
         """Start the viewer and return the URL."""
         self.temp_dir = tempfile.mkdtemp()
         self.html_file = Path(self.temp_dir) / "viewer.html"
         self.data_file = Path(self.temp_dir) / "data.json"
-        
+
         # Initialize empty data file
-        with open(self.data_file, 'w') as f:
+        with open(self.data_file, "w") as f:
             json.dump({"rows": [], "completed": False, "current_row": None}, f)
-        
+
         # Create HTML file
         html_content = self._generate_html(list(schema.keys()))
-        with open(self.html_file, 'w') as f:
+        with open(self.html_file, "w") as f:
             f.write(html_content)
-        
+
         # Start local server
         self._start_server()
-        
+
         # Open in browser
         url = f"http://localhost:{self.port}/viewer.html"
         if self.auto_open:
             webbrowser.open(url)
-        
+
         self._active = True
         return url
-    
+
     def add_row(self, row: Dict[str, Any]):
         """Add a new row to the viewer."""
         if not self._active or not self.data_file:
             return
-            
+
         try:
-            with open(self.data_file, 'r') as f:
+            with open(self.data_file, "r") as f:
                 data = json.load(f)
         except:
             data = {"rows": [], "completed": False, "current_row": None}
-        
+
         data["rows"].append(row)
         # Keep current_row so we can update the UI with final values
         data["completed_row"] = {"index": len(data["rows"]) - 1, "data": row}
         data["current_row"] = None  # Clear current row when row is complete
-        
-        with open(self.data_file, 'w') as f:
+
+        with open(self.data_file, "w") as f:
             json.dump(data, f)
-    
+
     def start_row(self, row_index: int):
         """Start a new row with empty cells."""
         if not self._active or not self.data_file:
             return
-            
+
         try:
-            with open(self.data_file, 'r') as f:
+            with open(self.data_file, "r") as f:
                 data = json.load(f)
         except:
             data = {"rows": [], "completed": False, "current_row": None}
-        
+
         data["current_row"] = {"index": row_index, "cells": {}}
-        
-        with open(self.data_file, 'w') as f:
+
+        with open(self.data_file, "w") as f:
             json.dump(data, f)
-    
+
     def update_cell(self, column: str, value: Any):
         """Update a single cell in the current row."""
         if not self._active or not self.data_file:
             return
-            
+
         try:
-            with open(self.data_file, 'r') as f:
+            with open(self.data_file, "r") as f:
                 data = json.load(f)
         except:
             data = {"rows": [], "completed": False, "current_row": None}
-        
+
         if data.get("current_row"):
             data["current_row"]["cells"][column] = value
-            
-            with open(self.data_file, 'w') as f:
+
+            with open(self.data_file, "w") as f:
                 json.dump(data, f)
-    
+
     def complete(self):
         """Mark generation as complete."""
         if not self._active or not self.data_file:
             return
-            
+
         try:
-            with open(self.data_file, 'r') as f:
+            with open(self.data_file, "r") as f:
                 data = json.load(f)
         except:
             data = {"rows": [], "completed": False, "current_row": None}
-        
+
         data["completed"] = True
-        
-        with open(self.data_file, 'w') as f:
+
+        with open(self.data_file, "w") as f:
             json.dump(data, f)
-    
+
     def stop(self):
         """Stop the viewer and cleanup resources."""
         self._active = False
         if self.server:
             self.server.shutdown()
             self.server.server_close()
-    
+
     def _start_server(self):
         """Start a local HTTP server."""
         os.chdir(self.temp_dir)
-        
+
         # Find available port
         for port in range(8000, 8100):
             try:
@@ -139,14 +139,16 @@ class LiveViewer:
                 break
             except OSError:
                 continue
-        
+
         if self.server:
-            self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+            self.server_thread = threading.Thread(
+                target=self.server.serve_forever, daemon=True
+            )
             self.server_thread.start()
-            
+
             # Register cleanup on exit
             atexit.register(self.stop)
-    
+
     def _generate_html(self, columns) -> str:
         """Generate the HTML content."""
         return f"""<!DOCTYPE html>
@@ -498,8 +500,10 @@ class LiveViewer:
 
 def create_viewer_callback(viewer: LiveViewer) -> Callable[[Dict[str, Any]], None]:
     """Create a callback function for dataset generation progress."""
+
     def callback(row: Dict[str, Any]):
         viewer.add_row(row)
+
     return callback
 
 
@@ -510,10 +514,10 @@ def generate_with_viewer(
     viewer_title: str = "Dataset Generation",
     auto_open: bool = True,
     stream_delay: float = 0.05,
-    cell_delay: float = 0.3
+    cell_delay: float = 0.3,
 ):
     """Generate dataset with live viewer showing cell-by-cell generation.
-    
+
     Args:
         dataset_instance: The Dataset instance
         n: Number of samples to generate
@@ -522,57 +526,58 @@ def generate_with_viewer(
         auto_open: Whether to auto-open browser
         stream_delay: Delay between rows for streaming effect
         cell_delay: Delay between individual cell generations
-    
+
     Returns:
         pd.DataFrame: Generated dataset
     """
     viewer = LiveViewer(title=viewer_title, auto_open=auto_open)
     num_samples = n or dataset_instance.n
-    
+
     try:
         # Start viewer
         url = viewer.start(dataset_instance.schema)
         print(f"Live viewer started at: {url}")
-        
+
         # Build dependency graph (copied from dataset logic)
         dependencies = dataset_instance._build_dependency_graph()
         execution_order = dataset_instance._topological_sort(dependencies)
-        
+
         # Generate data with live updates
         data = []
-        
+
         for i in range(num_samples):
             # Start new row
             viewer.start_row(i)
-            
+
             row = {}
             for column in execution_order:
                 # Generate cell value
                 value = dataset_instance._generate_value(column, row)
                 row[column] = value
-                
+
                 # Update viewer with new cell value
                 viewer.update_cell(column, value)
-                
+
                 # Delay to show cell generation effect
                 if cell_delay > 0:
                     time.sleep(cell_delay)
-            
+
             # Complete the row
             data.append(row)
             viewer.add_row(row)
-            
+
             # Small delay between rows
             if stream_delay > 0:
                 time.sleep(stream_delay)
-        
+
         viewer.complete()
-        
+
         # Import pandas dynamically to avoid circular imports
         import pandas as pd
+
         dataset_instance._data = pd.DataFrame(data)
         return dataset_instance._data
-        
+
     except Exception as e:
         viewer.stop()
         raise e

@@ -9,8 +9,6 @@ from datasets import Dataset as HFDataset
 
 from chatan.evaluate import (
     ExactMatchEvaluator,
-    SemanticSimilarityEvaluator,
-    BLEUEvaluator,
     EditDistanceEvaluator,
     LLMJudgeEvaluator,
     EvaluationFunction,
@@ -20,6 +18,23 @@ from chatan.evaluate import (
 )
 from chatan.dataset import Dataset, dataset
 from chatan.sampler import ChoiceSampler
+
+# Check for optional dependencies at module level
+SEMANTIC_SIMILARITY_AVAILABLE = False
+BLEU_AVAILABLE = False
+
+try:
+    import sentence_transformers
+    import sklearn.metrics.pairwise
+    SEMANTIC_SIMILARITY_AVAILABLE = True
+except ImportError:
+    pass
+
+try:
+    import nltk
+    BLEU_AVAILABLE = True
+except ImportError:
+    pass
 
 
 class TestExactMatchEvaluator:
@@ -89,108 +104,130 @@ class TestExactMatchEvaluator:
             evaluator.compute(predictions, targets)
 
 
+@pytest.mark.skipif(not SEMANTIC_SIMILARITY_AVAILABLE, reason="sentence-transformers not available")
 class TestSemanticSimilarityEvaluator:
     """Test SemanticSimilarityEvaluator functionality."""
 
-    @pytest.mark.skipif(
-        'sentence_transformers' not in sys.modules and 
-        'sklearn' not in sys.modules,
-        reason="sentence-transformers and sklearn not available"
-    )
-    @patch('sentence_transformers.SentenceTransformer')
-    @patch('sklearn.metrics.pairwise.cosine_similarity')
-    def test_semantic_similarity_basic(self, mock_cosine, mock_transformer):
+    def test_semantic_similarity_basic(self):
         """Test basic semantic similarity computation."""
-        # Mock the transformer
-        mock_model = Mock()
-        mock_model.encode.return_value = np.array([[1, 0], [0, 1]])
-        mock_transformer.return_value = mock_model
+        from chatan.evaluate import SemanticSimilarityEvaluator
         
-        # Mock cosine similarity
-        mock_cosine.side_effect = [[[0.8]], [[0.9]]]
-        
-        evaluator = SemanticSimilarityEvaluator()
-        predictions = ["hello world", "good morning"]
-        targets = ["hi earth", "good evening"]
-        
-        score = evaluator.compute(predictions, targets)
-        assert score == pytest.approx(0.85)  # (0.8 + 0.9) / 2
+        with patch('sentence_transformers.SentenceTransformer') as mock_transformer:
+            with patch('sklearn.metrics.pairwise.cosine_similarity') as mock_cosine:
+                # Mock the transformer
+                mock_model = Mock()
+                # Mock encode to return different embeddings for predictions and targets
+                mock_model.encode.side_effect = [
+                    np.array([[1, 0], [0, 1]]),  # predictions embeddings
+                    np.array([[0.8, 0.6], [0.9, 0.4]])  # targets embeddings
+                ]
+                mock_transformer.return_value = mock_model
+                
+                # Mock cosine similarity to return specific values for each call
+                mock_cosine.side_effect = [
+                    np.array([[0.8]]),  # First call
+                    np.array([[0.9]])   # Second call
+                ]
+                
+                evaluator = SemanticSimilarityEvaluator()
+                predictions = ["hello world", "good morning"]
+                targets = ["hi earth", "good evening"]
+                
+                score = evaluator.compute(predictions, targets)
+                assert score == pytest.approx(0.85)  # (0.8 + 0.9) / 2
 
     def test_missing_dependency_error(self):
         """Test error when sentence-transformers not installed."""
-        with patch.dict('sys.modules', {'sentence_transformers': None}):
-            evaluator = SemanticSimilarityEvaluator()
-            with pytest.raises(ImportError, match="sentence-transformers is required"):
-                evaluator.compute(["test"], ["test"])
+        from chatan.evaluate import SemanticSimilarityEvaluator
+        
+        with patch('chatan.evaluate.SEMANTIC_SIMILARITY_AVAILABLE', False):
+            with pytest.raises(ImportError, match="Semantic similarity evaluation requires additional dependencies"):
+                evaluator = SemanticSimilarityEvaluator()
 
-    @patch('sentence_transformers.SentenceTransformer')
-    def test_custom_model(self, mock_transformer):
+    def test_custom_model(self):
         """Test with custom model name."""
-        evaluator = SemanticSimilarityEvaluator(model="custom-model")
-        assert evaluator.model_name == "custom-model"
+        from chatan.evaluate import SemanticSimilarityEvaluator
+        
+        with patch('sentence_transformers.SentenceTransformer'):
+            evaluator = SemanticSimilarityEvaluator(model="custom-model")
+            assert evaluator.model_name == "custom-model"
 
-    @patch('sentence_transformers.SentenceTransformer')
-    def test_lazy_loading(self, mock_transformer):
+    def test_lazy_loading(self):
         """Test that model is loaded lazily."""
-        evaluator = SemanticSimilarityEvaluator()
-        assert evaluator._model is None
+        from chatan.evaluate import SemanticSimilarityEvaluator
         
-        # Mock the rest of the computation
-        mock_model = Mock()
-        mock_model.encode.return_value = np.array([[1, 0]])
-        mock_transformer.return_value = mock_model
-        
-        with patch('sklearn.metrics.pairwise.cosine_similarity', return_value=[[0.8]]):
-            evaluator.compute(["test"], ["test"])
-        
-        assert evaluator._model is not None
+        with patch('sentence_transformers.SentenceTransformer') as mock_transformer:
+            evaluator = SemanticSimilarityEvaluator()
+            assert evaluator._model is None
+            
+            # Mock the rest of the computation
+            mock_model = Mock()
+            mock_model.encode.return_value = np.array([[1, 0]])
+            mock_transformer.return_value = mock_model
+            
+            with patch('sklearn.metrics.pairwise.cosine_similarity', return_value=[[0.8]]):
+                evaluator.compute(["test"], ["test"])
+            
+            assert evaluator._model is not None
 
 
+@pytest.mark.skipif(not BLEU_AVAILABLE, reason="NLTK not available")
 class TestBLEUEvaluator:
     """Test BLEUEvaluator functionality."""
 
-    @patch('nltk.translate.bleu_score.sentence_bleu')
-    @patch('nltk.tokenize.word_tokenize')
-    @patch('nltk.download')
-    @patch('nltk.data.find')
-    def test_bleu_score_basic(self, mock_find, mock_download, mock_tokenize, mock_bleu):
+    def test_bleu_score_basic(self):
         """Test basic BLEU score computation."""
-        # Mock NLTK components
-        mock_find.side_effect = LookupError()  # Trigger download
-        mock_tokenize.side_effect = [
-            ["hello", "world"], ["hello", "world"],
-            ["good", "morning"], ["good", "morning"]
-        ]
-        mock_bleu.side_effect = [0.8, 0.9]
+        from chatan.evaluate import BLEUEvaluator
         
-        evaluator = BLEUEvaluator()
-        predictions = ["hello world", "good morning"]
-        targets = ["hello world", "good morning"]
-        
-        score = evaluator.compute(predictions, targets)
-        assert score == pytest.approx(0.85)  # (0.8 + 0.9) / 2
+        with patch('chatan.evaluate.word_tokenize') as mock_tokenize:
+            with patch('chatan.evaluate.sentence_bleu') as mock_bleu:
+                with patch('nltk.download') as mock_download:
+                    with patch('nltk.data.find') as mock_find:
+                        # Mock NLTK components
+                        mock_find.return_value = "mock_path"  # Don't trigger download
+                        mock_tokenize.side_effect = [
+                            ["hello", "world"], ["hello", "world"],
+                            ["good", "morning"], ["good", "morning"]
+                        ]
+                        mock_bleu.side_effect = [0.8, 0.9]
+                        
+                        evaluator = BLEUEvaluator()
+                        predictions = ["hello world", "good morning"]
+                        targets = ["hello world", "good morning"]
+                        
+                        score = evaluator.compute(predictions, targets)
+                        assert score == pytest.approx(0.85)  # (0.8 + 0.9) / 2
+                        
+                        # Verify the mocks were called correctly
+                        assert mock_bleu.call_count == 2
 
     def test_missing_nltk_error(self):
         """Test error when NLTK not installed."""
-        with patch.dict('sys.modules', {'nltk': None}):
-            evaluator = BLEUEvaluator()
-            with pytest.raises(ImportError, match="nltk is required"):
+        from chatan.evaluate import BLEUEvaluator
+        
+        with patch('chatan.evaluate.NLTK_AVAILABLE', False):
+            with pytest.raises(ImportError, match="BLEU score evaluation requires additional dependencies"):
+                evaluator = BLEUEvaluator()
+                # Force the error by calling compute
                 evaluator.compute(["test"], ["test"])
 
-    @patch('nltk.translate.bleu_score.sentence_bleu')
-    @patch('nltk.tokenize.word_tokenize')
-    @patch('nltk.download')
-    @patch('nltk.data.find')
-    def test_empty_tokens_handling(self, mock_find, mock_download, mock_tokenize, mock_bleu):
+    def test_empty_tokens_handling(self):
         """Test handling of empty tokenization."""
-        mock_tokenize.side_effect = [[], ["word"], ["word"], []]
+        from chatan.evaluate import BLEUEvaluator
         
-        evaluator = BLEUEvaluator()
-        predictions = ["", "word"]
-        targets = ["word", ""]
-        
-        score = evaluator.compute(predictions, targets)
-        assert score == 0.0  # Both should get 0.0 for empty tokens
+        with patch('chatan.evaluate.word_tokenize') as mock_tokenize:
+            with patch('nltk.translate.bleu_score.sentence_bleu') as mock_bleu:
+                with patch('nltk.download') as mock_download:
+                    with patch('nltk.data.find') as mock_find:
+                        mock_find.return_value = "mock_path"  # Don't trigger download
+                        mock_tokenize.side_effect = [[], ["word"], ["word"], []]
+                        
+                        evaluator = BLEUEvaluator()
+                        predictions = ["", "word"]
+                        targets = ["word", ""]
+                        
+                        score = evaluator.compute(predictions, targets)
+                        assert score == 0.0  # Both should get 0.0 for empty tokens
 
 
 class TestEditDistanceEvaluator:
@@ -344,18 +381,24 @@ class TestDatasetEvaluator:
         assert isinstance(eval_func, EvaluationFunction)
         assert isinstance(eval_func.evaluator, ExactMatchEvaluator)
 
-    @patch('chatan.evaluate.SemanticSimilarityEvaluator')
-    def test_semantic_similarity_creation(self, mock_evaluator_class):
+    @pytest.mark.skipif(not SEMANTIC_SIMILARITY_AVAILABLE, reason="sentence-transformers not available")
+    def test_semantic_similarity_creation(self):
         """Test semantic similarity evaluation function creation."""
-        mock_dataset = Mock()
-        evaluator = DatasetEvaluator(mock_dataset)
+        from chatan.evaluate import SemanticSimilarityEvaluator
         
-        eval_func = evaluator.semantic_similarity("col_a", "col_b", model="custom-model")
-        assert isinstance(eval_func, EvaluationFunction)
-        mock_evaluator_class.assert_called_once_with("custom-model")
+        with patch('chatan.evaluate.SemanticSimilarityEvaluator') as mock_evaluator_class:
+            mock_dataset = Mock()
+            evaluator = DatasetEvaluator(mock_dataset)
+            
+            eval_func = evaluator.semantic_similarity("col_a", "col_b", model="custom-model")
+            assert isinstance(eval_func, EvaluationFunction)
+            mock_evaluator_class.assert_called_once_with("custom-model")
 
+    @pytest.mark.skipif(not BLEU_AVAILABLE, reason="NLTK not available")
     def test_bleu_score_creation(self):
         """Test BLEU score evaluation function creation."""
+        from chatan.evaluate import BLEUEvaluator
+        
         mock_dataset = Mock()
         evaluator = DatasetEvaluator(mock_dataset)
         
@@ -389,42 +432,48 @@ class TestEvalNamespace:
         result = eval_func({"pred": "hello", "target": "hi"})
         assert result == 0.0
 
-    @patch('chatan.evaluate.SemanticSimilarityEvaluator')
-    def test_semantic_similarity_schema_function(self, mock_evaluator_class):
+    @pytest.mark.skipif(not SEMANTIC_SIMILARITY_AVAILABLE, reason="sentence-transformers not available")
+    def test_semantic_similarity_schema_function(self):
         """Test semantic similarity function for schema use."""
-        mock_evaluator = Mock()
-        mock_evaluator.compute.return_value = 0.85
-        mock_evaluator_class.return_value = mock_evaluator
+        from chatan.evaluate import SemanticSimilarityEvaluator
         
-        eval_func = eval.semantic_similarity("pred", "target")
-        result = eval_func({"pred": "hello", "target": "hi"})
-        
-        assert result == 0.85
-        mock_evaluator.compute.assert_called_once_with(["hello"], ["hi"])
+        with patch('chatan.evaluate.SemanticSimilarityEvaluator') as mock_evaluator_class:
+            mock_evaluator = Mock()
+            mock_evaluator.compute.return_value = 0.85
+            mock_evaluator_class.return_value = mock_evaluator
+            
+            eval_func = eval.semantic_similarity("pred", "target")
+            result = eval_func({"pred": "hello", "target": "hi"})
+            
+            assert result == 0.85
+            mock_evaluator.compute.assert_called_once_with(["hello"], ["hi"])
 
-    @patch('chatan.evaluate.BLEUEvaluator')
-    def test_bleu_score_schema_function(self, mock_evaluator_class):
+    @pytest.mark.skipif(not BLEU_AVAILABLE, reason="NLTK not available")
+    def test_bleu_score_schema_function(self):
         """Test BLEU score function for schema use."""
-        mock_evaluator = Mock()
-        mock_evaluator.compute.return_value = 0.7
-        mock_evaluator_class.return_value = mock_evaluator
+        from chatan.evaluate import BLEUEvaluator
         
-        eval_func = eval.bleu_score("pred", "target")
-        result = eval_func({"pred": "test", "target": "test"})
-        
-        assert result == 0.7
+        with patch('chatan.evaluate.BLEUEvaluator') as mock_evaluator_class:
+            mock_evaluator = Mock()
+            mock_evaluator.compute.return_value = 0.7
+            mock_evaluator_class.return_value = mock_evaluator
+            
+            eval_func = eval.bleu_score("pred", "target")
+            result = eval_func({"pred": "test", "target": "test"})
+            
+            assert result == 0.7
 
-    @patch('chatan.evaluate.EditDistanceEvaluator')
-    def test_edit_distance_schema_function(self, mock_evaluator_class):
+    def test_edit_distance_schema_function(self):
         """Test edit distance function for schema use."""
-        mock_evaluator = Mock()
-        mock_evaluator.compute.return_value = 0.9
-        mock_evaluator_class.return_value = mock_evaluator
-        
-        eval_func = eval.edit_distance("pred", "target")
-        result = eval_func({"pred": "hello", "target": "hallo"})
-        
-        assert result == 0.9
+        with patch('chatan.evaluate.EditDistanceEvaluator') as mock_evaluator_class:
+            mock_evaluator = Mock()
+            mock_evaluator.compute.return_value = 0.9
+            mock_evaluator_class.return_value = mock_evaluator
+            
+            eval_func = eval.edit_distance("pred", "target")
+            result = eval_func({"pred": "hello", "target": "hallo"})
+            
+            assert result == 0.9
 
 
 class TestTopLevelEvaluate:
@@ -528,24 +577,22 @@ class TestDatasetIntegration:
 class TestIntegrationScenarios:
     """Test realistic integration scenarios."""
 
-    @patch('chatan.evaluate.ExactMatchEvaluator.compute')
-    def test_schema_based_evaluation(self, mock_compute):
+    def test_schema_based_evaluation(self):
         """Test schema-based evaluation (Option A)."""
-        mock_compute.return_value = 0.8
-        
-        schema = {
-            "response": ChoiceSampler(["answer1", "answer2"]),
-            "target": ChoiceSampler(["answer1", "answer2"]),
-            "exact_match": eval.exact_match("response", "target")
-        }
-        
-        ds = dataset(schema, n=5)
-        df = ds.generate()
-        
-        # Should have evaluation column
-        assert "exact_match" in df.columns
-        # All values should be either 0.0 or 1.0 (exact match results)
-        assert all(val in [0.0, 1.0] for val in df["exact_match"])
+        with patch('chatan.evaluate.ExactMatchEvaluator.compute', return_value=0.8):
+            schema = {
+                "response": ChoiceSampler(["answer1", "answer2"]),
+                "target": ChoiceSampler(["answer1", "answer2"]),
+                "exact_match": eval.exact_match("response", "target")
+            }
+            
+            ds = dataset(schema, n=5)
+            df = ds.generate()
+            
+            # Should have evaluation column
+            assert "exact_match" in df.columns
+            # All values should be either 0.0 or 1.0 (exact match results)
+            assert all(val in [0.0, 1.0] for val in df["exact_match"])
 
     def test_aggregate_evaluation(self):
         """Test aggregate evaluation (Option B)."""
