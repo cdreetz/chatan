@@ -9,8 +9,6 @@ from datasets import Dataset as HFDataset
 
 from chatan.evaluate import (
     ExactMatchEvaluator,
-    SemanticSimilarityEvaluator,
-    BLEUEvaluator,
     EditDistanceEvaluator,
     LLMJudgeEvaluator,
     EvaluationFunction,
@@ -20,6 +18,19 @@ from chatan.evaluate import (
 )
 from chatan.dataset import Dataset, dataset
 from chatan.sampler import ChoiceSampler
+
+# Conditional imports for optional dependencies
+try:
+    from chatan.evaluate import SemanticSimilarityEvaluator
+    SEMANTIC_SIMILARITY_AVAILABLE = True
+except ImportError:
+    SEMANTIC_SIMILARITY_AVAILABLE = False
+
+try:
+    from chatan.evaluate import BLEUEvaluator
+    BLEU_AVAILABLE = True
+except ImportError:
+    BLEU_AVAILABLE = False
 
 
 class TestExactMatchEvaluator:
@@ -89,14 +100,10 @@ class TestExactMatchEvaluator:
             evaluator.compute(predictions, targets)
 
 
+@pytest.mark.skipif(not SEMANTIC_SIMILARITY_AVAILABLE, reason="sentence-transformers not available")
 class TestSemanticSimilarityEvaluator:
     """Test SemanticSimilarityEvaluator functionality."""
 
-    @pytest.mark.skipif(
-        'sentence_transformers' not in sys.modules and
-        'sklearn' not in sys.modules,
-        reason="sentence-transformers and sklearn not available"
-    )
     @patch('sentence_transformers.SentenceTransformer')
     @patch('chatan.evaluate.cosine_similarity')
     def test_semantic_similarity_basic(self, mock_cosine, mock_transformer):
@@ -152,6 +159,7 @@ class TestSemanticSimilarityEvaluator:
         assert evaluator._model is not None
 
 
+@pytest.mark.skipif(not BLEU_AVAILABLE, reason="NLTK not available")
 class TestBLEUEvaluator:
     """Test BLEUEvaluator functionality."""
 
@@ -355,6 +363,7 @@ class TestDatasetEvaluator:
         assert isinstance(eval_func, EvaluationFunction)
         assert isinstance(eval_func.evaluator, ExactMatchEvaluator)
 
+    @pytest.mark.skipif(not SEMANTIC_SIMILARITY_AVAILABLE, reason="sentence-transformers not available")
     @patch('chatan.evaluate.SemanticSimilarityEvaluator')
     def test_semantic_similarity_creation(self, mock_evaluator_class):
         """Test semantic similarity evaluation function creation."""
@@ -365,6 +374,7 @@ class TestDatasetEvaluator:
         assert isinstance(eval_func, EvaluationFunction)
         mock_evaluator_class.assert_called_once_with("custom-model")
 
+    @pytest.mark.skipif(not BLEU_AVAILABLE, reason="NLTK not available")
     def test_bleu_score_creation(self):
         """Test BLEU score evaluation function creation."""
         mock_dataset = Mock()
@@ -400,6 +410,7 @@ class TestEvalNamespace:
         result = eval_func({"pred": "hello", "target": "hi"})
         assert result == 0.0
 
+    @pytest.mark.skipif(not SEMANTIC_SIMILARITY_AVAILABLE, reason="sentence-transformers not available")
     @patch('chatan.evaluate.SemanticSimilarityEvaluator')
     def test_semantic_similarity_schema_function(self, mock_evaluator_class):
         """Test semantic similarity function for schema use."""
@@ -413,6 +424,7 @@ class TestEvalNamespace:
         assert result == 0.85
         mock_evaluator.compute.assert_called_once_with(["hello"], ["hi"])
 
+    @pytest.mark.skipif(not BLEU_AVAILABLE, reason="NLTK not available")
     @patch('chatan.evaluate.BLEUEvaluator')
     def test_bleu_score_schema_function(self, mock_evaluator_class):
         """Test BLEU score function for schema use."""
