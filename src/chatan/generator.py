@@ -3,7 +3,7 @@
 from typing import Dict, Any, Optional, Union, List
 import openai
 import anthropic
-from transformers import pipeline
+from transformers import pipeline, AutoTokenizer, AutoModelForCasualLM
 from abc import ABC, abstractmethod
 
 
