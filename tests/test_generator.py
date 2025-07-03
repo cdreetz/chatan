@@ -1,16 +1,23 @@
 """Comprehensive tests for generator module."""
 
 import pytest
+import sys
 from unittest.mock import Mock, patch, MagicMock
-import torch
 from chatan.generator import (
     OpenAIGenerator,
     AnthropicGenerator,
-    TransformersGenerator,
     GeneratorFunction,
     GeneratorClient,
     generator
 )
+
+# Conditional imports for torch-dependent tests
+try:
+    import torch
+    from chatan.generator import TransformersGenerator
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
 
 
 class TestOpenAIGenerator:
@@ -140,7 +147,30 @@ class TestAnthropicGenerator:
         assert call_args[1]["temperature"] == 0.7
 
 
+@pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not available")
+class TestTransformersGenerator:
+    """Test TransformersGenerator functionality (only when torch is available)."""
+    
+    @patch('transformers.AutoTokenizer.from_pretrained')
+    @patch('transformers.AutoModelForCausalLM.from_pretrained')
+    def test_transformers_init(self, mock_model, mock_tokenizer):
+        """Test TransformersGenerator initialization."""
+        # Mock tokenizer
+        mock_tok = Mock()
+        mock_tok.pad_token = None
+        mock_tok.eos_token = "[EOS]"
+        mock_tokenizer.return_value = mock_tok
+        
+        # Mock model
+        mock_mdl = Mock()
+        mock_model.return_value = mock_mdl
 
+        with patch('torch.cuda.is_available', return_value=False):
+            gen = TransformersGenerator("gpt2")
+            
+        assert gen.model_name == "gpt2"
+        assert gen.device == "cpu"
+        mock_tokenizer.assert_called_once_with("gpt2")
 
 
 class TestGeneratorFunction:
@@ -192,11 +222,19 @@ class TestGeneratorClient:
         client = GeneratorClient("anthropic", "test-key", model="claude-3-opus-20240229")
         mock_anthropic_gen.assert_called_once_with("test-key", model="claude-3-opus-20240229")
 
+    @pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not available")
     @patch('chatan.generator.TransformersGenerator')
     def test_transformers_client_creation(self, mock_hf_gen):
         """Test Transformers client creation."""
         client = GeneratorClient("transformers", model="gpt2")
         mock_hf_gen.assert_called_once_with(model="gpt2")
+
+    def test_transformers_client_creation_no_torch(self):
+        """Test Transformers client creation when torch is not available."""
+        # Temporarily patch TRANSFORMERS_AVAILABLE to False
+        with patch('chatan.generator.TRANSFORMERS_AVAILALBE', False):
+            with pytest.raises(ImportError, match="Local model support requires additional dependencies"):
+                GeneratorClient("transformers", model="gpt2")
 
     def test_unsupported_provider(self):
         """Test error handling for unsupported providers."""
@@ -306,6 +344,7 @@ class TestIntegration:
         assert result2 == "Response"
         assert mock_client.chat.completions.create.call_count == 2
 
+    @pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not available")
     @patch('transformers.AutoTokenizer.from_pretrained')
     @patch('transformers.AutoModelForCausalLM.from_pretrained')
     def test_end_to_end_transformers(self, mock_model, mock_tokenizer):
@@ -364,9 +403,10 @@ class TestIntegration:
             generator("ANTHROPIC", "test-key")
             mock_gen.assert_called_once()
 
-        with patch('chatan.generator.TransformersGenerator') as mock_gen:
-            generator("TRANSFORMERS", model="gpt2")
-            mock_gen.assert_called_once()
+        if TORCH_AVAILABLE:
+            with patch('chatan.generator.TransformersGenerator') as mock_gen:
+                generator("TRANSFORMERS", model="gpt2")
+                mock_gen.assert_called_once()
 
 
 class TestErrorHandling:
