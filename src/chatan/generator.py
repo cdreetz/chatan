@@ -3,7 +3,7 @@
 from typing import Dict, Any, Optional, Union, List
 import openai
 import anthropic
-from transformers import pipeline, AutoTokenizer, AutoModelForCasualLM
+from transformers import pipeline
 from abc import ABC, abstractmethod
 
 
@@ -70,7 +70,7 @@ class TransformersGenerator(BaseGenerator):
         self._initialize_model()
 
     def _initialize_model(self):
-        from transformers import AutoTokenizer, AutoModelForCasualLM
+        from transformers import AutoTokenizer, AutoModelForCausalLM
         import torch
 
         if torch.cuda.is_available():
@@ -87,7 +87,7 @@ class TransformersGenerator(BaseGenerator):
         }
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        self.model = AutoModelForCasualLM.from_pretrained(
+        self.model = AutoModelForCausalLM.from_pretrained(
             self.model_name,
             **model_kwargs
         )
