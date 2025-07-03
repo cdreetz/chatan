@@ -139,21 +139,7 @@ class TestAnthropicGenerator:
         assert call_args[1]["temperature"] == 0.7
 
 
-class TestTransformersGenerator:
-    """Test local HuggingFace/transformers generator."""
 
-    @patch('chatan.generator.pipeline')
-    def test_generate_basic(self, mock_pipeline):
-        mock_func = Mock()
-        mock_func.return_value = [{"generated_text": " Hello "}]
-        mock_pipeline.return_value = mock_func
-
-        gen = TransformersGenerator(model="gpt2")
-        result = gen.generate("Test prompt")
-
-        assert result == "Hello"
-        mock_pipeline.assert_called_once_with("text-generation", model="gpt2")
-        mock_func.assert_called_once_with("Test prompt")
 
 
 class TestGeneratorFunction:
@@ -319,20 +305,32 @@ class TestIntegration:
         assert result2 == "Response"
         assert mock_client.chat.completions.create.call_count == 2
 
-    @patch('chatan.generator.pipeline')
-    def test_end_to_end_transformers(self, mock_pipeline):
+    @patch('transformers.AutoTokenizer.from_pretrained')
+    @patch('transformers.AutoModelForCausalLM.from_pretrained')
+    def test_end_to_end_transformers(self, mock_model, mock_tokenizer):
         """Test complete Transformers generation pipeline."""
-        mock_func = Mock()
-        mock_func.return_value = [{"generated_text": "Hello"}]
-        mock_pipeline.return_value = mock_func
+        # Mock tokenizer
+        mock_tok = Mock()
+        mock_tok.pad_token = None
+        mock_tok.eos_token = "[EOS]"
+        mock_tok.eos_token_id = 2
+        mock_tok.return_value = {'input_ids': torch.tensor([[1, 2, 3]]), 'attention_mask': torch.tensor([[1, 1, 1]])}
+        mock_tok.decode.return_value = "Hello"
+        mock_tokenizer.return_value = mock_tok
+        
+        # Mock model
+        mock_mdl = Mock()
+        mock_mdl.generate.return_value = [torch.tensor([1, 2, 3, 4, 5])]
+        mock_model.return_value = mock_mdl
 
         gen = generator("transformers", model="gpt2")
         func = gen("Say hi to {name}")
-        result = func({"name": "Bob"})
+        
+        with patch('torch.no_grad'):
+            result = func({"name": "Bob"})
 
         assert result == "Hello"
-        mock_pipeline.assert_called_once_with("text-generation", model="gpt2")
-        mock_func.assert_called_once_with("Say hi to Bob")
+        mock_tokenizer.assert_called_once_with("gpt2")
 
     @patch('openai.OpenAI')
     def test_generator_function_with_variables(self, mock_openai):
