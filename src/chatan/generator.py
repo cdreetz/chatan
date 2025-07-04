@@ -142,8 +142,16 @@ class TransformersGenerator(BaseGenerator):
                 "eos_token_id": self.tokenizer.eos_token_id,
             }
 
+            messages = [{"role": "user", "content": prompt}]
+
+            formatted_prompt = self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+
             inputs = self.tokenizer(
-                prompt,
+                formatted_prompt,
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
