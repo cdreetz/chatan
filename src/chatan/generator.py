@@ -12,9 +12,9 @@ try:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    TRANSFORMERS_AVAILALBE = True
+    TRANSFORMERS_AVAILABLE = True
 except ImportError:
-    TRANSFORMERS_AVAILALBE = False
+    TRANSFORMERS_AVAILABLE = False
 
 
 class BaseGenerator(ABC):
@@ -71,7 +71,7 @@ class TransformersGenerator(BaseGenerator):
     """Local HuggingFace/transformers generator with aggressive memory management."""
 
     def __init__(self, model: str, force_cpu: bool = False, **kwargs):
-        if not TRANSFORMERS_AVAILALBE:
+        if not TRANSFORMERS_AVAILABLE:
             raise ImportError(
                 "Transformers and PyTorch are required for local model generation. "
                 "Install with: pip install chatan[local]"
@@ -90,14 +90,19 @@ class TransformersGenerator(BaseGenerator):
 
         if torch.cuda.is_available():
             self.device = "cuda"
-            self.dtype = torch.float16
+            self.dtype = "auto"
+            self.device_map = "auto"
+            self.low_cpu_mem_usage = False
         else:
             self.device = "cpu"
             self.dtype = torch.float32
+            self.device_map = None
+            self.low_cpu_mem_usage = True
 
         model_kwargs = {
             "torch_dtype": self.dtype,
-            "low_cpu_mem_usage": True,
+            "device_map": self.device_map,
+            "low_cpu_mem_usage": self.low_cpu_mem_usage,
             "trust_remote_code": True,
         }
 
@@ -116,9 +121,9 @@ class TransformersGenerator(BaseGenerator):
 
     def _clear_cache(self):
         """Clear all possible caches."""
-        if self.device == "cuda":
+        if hasattr(torch, 'cuda') and torch.cuda.is_available():
             torch.cuda.empty_cache()
-        elif self.device == "mps":
+        elif hasattr(torch, 'mps') and torch.backends.mps.is_available():
             try:
                 torch.mps.empty_cache()
             except Exception as e:
@@ -128,7 +133,6 @@ class TransformersGenerator(BaseGenerator):
         gc.collect()
 
     def generate(self, prompt: str, **kwargs) -> str:
-        """Generate content - optimized for CPU with 16GB RAM."""
         try:
             generation_kwargs = {
                 "max_new_tokens": kwargs.get("max_new_tokens", 512),
@@ -145,6 +149,11 @@ class TransformersGenerator(BaseGenerator):
                 truncation=True,
                 max_length=2048,
             )
+
+            if self.device and self.device != "auto":
+                inputs = inputs.to(self.device)
+            elif hasattr(self.model, 'device'):
+                inputs = inputs.to(self.model.device)
 
             # Generate
             with torch.no_grad():
