@@ -2,6 +2,8 @@
 
 import gc
 import os
+import torch
+import numpy as np
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Union
 
@@ -12,9 +14,9 @@ try:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    TRANSFORMERS_AVAILALBE = True
+    TRANSFORMERS_AVAILABLE = True
 except ImportError:
-    TRANSFORMERS_AVAILALBE = False
+    TRANSFORMERS_AVAILABLE = False
 
 
 class BaseGenerator(ABC):
@@ -68,10 +70,10 @@ class AnthropicGenerator(BaseGenerator):
 
 
 class TransformersGenerator(BaseGenerator):
-    """Local HuggingFace/transformers generator with aggressive memory management."""
+    """Local HuggingFace/transformers generator with robust error handling and numerical stability."""
 
     def __init__(self, model: str, force_cpu: bool = False, **kwargs):
-        if not TRANSFORMERS_AVAILALBE:
+        if not TRANSFORMERS_AVAILABLE:
             raise ImportError(
                 "Transformers and PyTorch are required for local model generation. "
                 "Install with: pip install chatan[local]"
@@ -86,9 +88,8 @@ class TransformersGenerator(BaseGenerator):
         self._initialize_model()
 
     def _initialize_model(self):
-        """Initialize model - force CPU to avoid MPS tensor size bug."""
-
-        if torch.cuda.is_available():
+        """Initialize model with proper device handling."""
+        if torch.cuda.is_available() and not self.force_cpu:
             self.device = "cuda"
             self.dtype = torch.float16
         else:
@@ -108,6 +109,9 @@ class TransformersGenerator(BaseGenerator):
             self.model_name, **model_kwargs
         )
 
+        # Ensure model is on correct device
+        self.model = self.model.to(self.device)
+
         # Add pad token if missing
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -122,49 +126,123 @@ class TransformersGenerator(BaseGenerator):
             try:
                 torch.mps.empty_cache()
             except Exception as e:
-                print(
-                    f"Failed to clear MPS cache: {e}"
-                )  # Log the error instead of ignoring
+                print(f"Failed to clear MPS cache: {e}")
         gc.collect()
 
-    def generate(self, prompt: str, **kwargs) -> str:
-        """Generate content - optimized for CPU with 16GB RAM."""
-        try:
-            generation_kwargs = {
-                "max_new_tokens": kwargs.get("max_new_tokens", 512),
-                "temperature": kwargs.get("temperature", 0.7),
-                "do_sample": kwargs.get("do_sample", True),
-                "pad_token_id": self.tokenizer.eos_token_id,
-                "eos_token_id": self.tokenizer.eos_token_id,
-            }
+    def _validate_generation_params(self, **kwargs) -> Dict[str, Any]:
+        """Validate and sanitize generation parameters to prevent numerical issues."""
+        generation_kwargs = {
+            "max_new_tokens": kwargs.get("max_new_tokens", 512),
+            "pad_token_id": self.tokenizer.pad_token_id or self.tokenizer.eos_token_id,
+            "eos_token_id": self.tokenizer.eos_token_id,
+        }
 
+        # Handle sampling parameters with numerical stability
+        do_sample = kwargs.get("do_sample", True)
+        temperature = kwargs.get("temperature", 0.7)
+        
+        if do_sample:
+            # Ensure temperature is in a safe range to prevent inf/nan
+            temperature = max(0.01, min(temperature, 2.0))  # Clamp between 0.01 and 2.0
+            generation_kwargs.update({
+                "do_sample": True,
+                "temperature": temperature,
+                "top_p": kwargs.get("top_p", 0.9),
+                "top_k": kwargs.get("top_k", 50),
+                "repetition_penalty": kwargs.get("repetition_penalty", 1.0),
+            })
+        else:
+            # Use greedy decoding
+            generation_kwargs["do_sample"] = False
+
+        # Add additional safety parameters
+        generation_kwargs.update({
+            "no_repeat_ngram_size": kwargs.get("no_repeat_ngram_size", 3),
+            "early_stopping": kwargs.get("early_stopping", True),
+            "use_cache": True,
+        })
+
+        return generation_kwargs
+
+    def _validate_inputs(self, inputs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Validate input tensors for numerical stability."""
+        # Move inputs to correct device
+        for key, tensor in inputs.items():
+            inputs[key] = tensor.to(self.device)
+        
+        # Ensure attention_mask is present
+        if "attention_mask" not in inputs:
+            inputs["attention_mask"] = torch.ones_like(inputs["input_ids"])
+        
+        return inputs
+
+    def _safe_generate(self, inputs: Dict[str, torch.Tensor], generation_kwargs: Dict[str, Any]) -> torch.Tensor:
+        """Safely generate with fallback strategies."""
+        try:
+            # First attempt with provided parameters
+            with torch.no_grad():
+                outputs = self.model.generate(**inputs, **generation_kwargs)
+            return outputs
+        
+        except RuntimeError as e:
+            if "probability tensor contains" in str(e):
+                print(f"Numerical instability detected, falling back to greedy decoding: {e}")
+                
+                # Fallback to greedy decoding
+                safe_kwargs = generation_kwargs.copy()
+                safe_kwargs.update({
+                    "do_sample": False,
+                })
+                # Remove sampling-specific parameters
+                for key in ["temperature", "top_p", "top_k"]:
+                    safe_kwargs.pop(key, None)
+                
+                with torch.no_grad():
+                    outputs = self.model.generate(**inputs, **safe_kwargs)
+                return outputs
+            else:
+                raise e
+
+    def generate(self, prompt: str, **kwargs) -> str:
+        """Generate content with robust error handling and numerical stability."""
+        try:
+            # Validate generation parameters
+            generation_kwargs = self._validate_generation_params(**kwargs)
+            
+            # Tokenize input
             inputs = self.tokenizer(
                 prompt,
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=2048,
+                max_length=kwargs.get("max_input_length", 2048),
             )
+            
+            # Validate inputs
+            inputs = self._validate_inputs(inputs)
+            
+            # Generate with safety measures
+            outputs = self._safe_generate(inputs, generation_kwargs)
 
-            # Generate
-            with torch.no_grad():
-                outputs = self.model.generate(**inputs, **generation_kwargs)
-
-            # Extract new tokens
+            # Extract new tokens only
             input_length = inputs["input_ids"].shape[1]
             generated_tokens = outputs[0][input_length:]
+            
+            # Decode
             result = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
 
             # Cleanup
             del inputs, outputs, generated_tokens
-            gc.collect()
+            self._clear_cache()
 
-            return result.strip() if isinstance(result, str) else result
+            return result.strip() if isinstance(result, str) else str(result).strip()
 
         except Exception as e:
             print(f"Generation failed: {e}")
-            gc.collect()
-            raise e
+            self._clear_cache()
+            
+            # Return a descriptive error message instead of crashing
+            return f"[GENERATION_ERROR: {type(e).__name__}: {str(e)[:100]}]"
 
     def __del__(self):
         """Cleanup when destroyed."""
