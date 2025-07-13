@@ -40,6 +40,14 @@ html_theme_options = {
 }
 html_static_path = ['_static']
 
+# Show the full navigation hierarchy in the sidebar
+html_theme_options = {
+    'sidebar_collapse': False,
+}
+html_sidebars = {
+    '**': ['about.html', 'globaltoc.html', 'searchbox.html'],
+}
+
 # -- Extension configuration -------------------------------------------------
 
 
