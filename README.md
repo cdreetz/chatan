@@ -46,6 +46,10 @@ df = ds.generate(n=10)
 ```python
 # OpenAI
 gen = chatan.generator("openai", "YOUR_OPENAI_API_KEY")
+# OpenAI-compatible service that does not require a key
+gen_alt = chatan.generator(
+    "openai", base_url="https://api.example.com/v1"
+)
 
 # Anthropic
 gen = chatan.generator("anthropic", "YOUR_ANTHROPIC_API_KEY")

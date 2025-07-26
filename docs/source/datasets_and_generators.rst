@@ -10,6 +10,8 @@ Supported generator providers
 Chatan includes built-in clients for a few common model sources:
 
 * ``openai`` - access GPT models via the OpenAI API
+  (use ``base_url`` for OpenAI-compatible endpoints; API key required
+  only when ``base_url`` is omitted)
 * ``anthropic`` - use Claude models from Anthropic
 * ``transformers``/``huggingface`` - run local HuggingFace models with ``transformers``
 
