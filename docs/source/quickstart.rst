@@ -18,8 +18,12 @@ Basic Usage
    .. code-block:: python
 
       import chatan
-      
-      gen = chatan.generator("openai", "YOUR_OPENAI_API_KEY")
+
+   gen = chatan.generator("openai", "YOUR_OPENAI_API_KEY")
+   # use an OpenAI-compatible service that doesn't need a key
+   # gen = chatan.generator(
+   #     "openai", base_url="https://api.example.com/v1"
+   # )
       # or for Anthropic
       # gen = chatan.generator("anthropic", "YOUR_ANTHROPIC_API_KEY")
 

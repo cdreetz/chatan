@@ -29,8 +29,34 @@ class BaseGenerator(ABC):
 class OpenAIGenerator(BaseGenerator):
     """OpenAI GPT generator."""
 
-    def __init__(self, api_key: str, model: str = "gpt-3.5-turbo", **kwargs):
-        self.client = openai.OpenAI(api_key=api_key)
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "gpt-3.5-turbo",
+        base_url: Optional[str] = None,
+        **kwargs,
+    ) -> None:
+        """Initialize the generator.
+
+        Parameters
+        ----------
+        api_key:
+            API key for authenticating with the OpenAI service. Required if
+            ``base_url`` is not provided.
+        model:
+            Model name to use for generation.
+        base_url:
+            Optional custom API base URL for OpenAI compatible services.
+        **kwargs:
+            Additional default parameters passed to ``chat.completions.create``.
+        """
+
+        client_kwargs = {}
+        if api_key is not None:
+            client_kwargs["api_key"] = api_key
+        if base_url is not None:
+            client_kwargs["base_url"] = base_url
+        self.client = openai.OpenAI(**client_kwargs)
         self.model = model
         self.default_kwargs = kwargs
 
@@ -209,7 +235,7 @@ class GeneratorClient:
         provider_lower = provider.lower()
         try:
             if provider_lower == "openai":
-                if api_key is None:
+                if api_key is None and kwargs.get("base_url") is None:
                     raise ValueError("API key is required for OpenAI")
                 self._generator = OpenAIGenerator(api_key, **kwargs)
             elif provider_lower == "anthropic":
@@ -256,6 +282,9 @@ def generator(
     provider: str = "openai", api_key: Optional[str] = None, **kwargs
 ) -> GeneratorClient:
     """Create a generator client."""
-    if provider.lower() in {"openai", "anthropic"} and api_key is None:
+    if provider.lower() == "openai":
+        if api_key is None and kwargs.get("base_url") is None:
+            raise ValueError("API key is required")
+    elif provider.lower() == "anthropic" and api_key is None:
         raise ValueError("API key is required")
     return GeneratorClient(provider, api_key, **kwargs)
