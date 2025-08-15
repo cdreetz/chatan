@@ -9,7 +9,6 @@ from typing import Dict, Any
 import asyncio
 from aiohttp import web
 import aiohttp_cors
-import pkg_resources
 
 from .schema_utils import extract_schema_metadata
 
@@ -103,14 +102,21 @@ class LiveViewer:
                 allow_methods="*"
             )
         })
-        
-        # Serve static files
-        self.app.router.add_static('/', self.temp_dir, name='static')
-        
+
         # API routes
         self.app.router.add_get('/api/data', self._serve_data)
         self.app.router.add_get('/api/schema', self._serve_schema)
         self.app.router.add_post('/api/update_schema', self._update_schema)
+
+        # Explicit oute for root to serve index
+        async def serve_index(request):
+            index_path = Path(self.temp_dir) / "index.html"
+            return web.FileResponse(index_path)
+        
+        # Serve static files
+        self.app.router.add_get('/', serve_index)
+
+        self.app.router.add_static('/', self.temp_dir, name='static')
         
         # Add CORS to routes
         for route in list(self.app.router.routes()):
@@ -130,7 +136,7 @@ class LiveViewer:
                     await self.runner.cleanup()
                 continue
     
-    # Data management methods (unchanged)
+    # Data management methods
     def start_row(self, row_index: int):
         """Start a new row with empty cells."""
         if not self._active or not self.data_file:
