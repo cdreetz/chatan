@@ -17,9 +17,23 @@ const ExcelLikeViewer = () => {
   const [selectedColumn, setSelectedColumn] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
 
-  // Real state - starts empty
-  const [columns, setColumns] = useState([]);
-  const [data, setData] = useState([]);
+  // Initialize with default A-Z columns like Excel
+  const getDefaultColumns = () => {
+    return Array.from({ length: 26 }, (_, i) => ({
+      header: String.fromCharCode(65 + i), // A, B, C, ..., Z (display header)
+      name: null, // Actual column name (null until configured)
+      type: "empty",
+      config: {},
+    }));
+  };
+
+  const getDefaultRows = () => {
+    return Array.from({ length: 10 }, (_, i) => ({})); // 10 empty rows
+  };
+
+  // Real state - starts with Excel-like defaults
+  const [columns, setColumns] = useState(getDefaultColumns());
+  const [data, setData] = useState(getDefaultRows());
   const [datasetTitle, setDatasetTitle] = useState("New Dataset");
   const [generationProgress, setGenerationProgress] = useState({
     current: 0,
@@ -31,6 +45,9 @@ const ExcelLikeViewer = () => {
   const [columnName, setColumnName] = useState("");
   const [columnConfig, setColumnConfig] = useState("");
   const [modalErrors, setModalErrors] = useState({});
+  const [columnWidths, setColumnWidths] = useState({});
+  const [isResizing, setIsResizing] = useState(false);
+  const [resizingColumn, setResizingColumn] = useState(null);
 
   // Load initial state
   useEffect(() => {
@@ -41,25 +58,67 @@ const ExcelLikeViewer = () => {
     return () => clearInterval(interval);
   }, []);
 
+  // Column resizing functionality
+  const handleMouseDown = (e, columnName) => {
+    e.preventDefault();
+    setIsResizing(true);
+    setResizingColumn(columnName);
+    
+    const startX = e.clientX;
+    const startWidth = columnWidths[columnName] || 96; // Default width
+    
+    const handleMouseMove = (e) => {
+      const diff = e.clientX - startX;
+      const newWidth = Math.max(60, Math.min(300, startWidth + diff)); // Min 60px, max 300px
+      setColumnWidths(prev => ({ ...prev, [columnName]: newWidth }));
+    };
+    
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      setResizingColumn(null);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+    
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
+
   const loadColumns = async () => {
     try {
       const response = await fetch("/api/columns");
       if (response.ok) {
         const result = await response.json();
         if (result.columns && Object.keys(result.columns).length > 0) {
-          // Convert backend schema to UI format
-          const columnsArray = Object.entries(result.columns).map(
+          // Convert backend schema to UI format and merge with default columns
+          const configuredColumns = Object.entries(result.columns).map(
             ([name, config]) => ({
               name,
               type: config.type || "prompt",
               config: config,
             }),
           );
-          setColumns(columnsArray);
+          
+          // Start with default A-Z columns, then replace configured ones
+          const defaultCols = getDefaultColumns();
+          const mergedColumns = defaultCols.map(defaultCol => {
+            const configured = configuredColumns.find(c => c.name === defaultCol.header);
+            return configured ? { ...configured, header: defaultCol.header } : defaultCol;
+          });
+          
+          setColumns(mergedColumns);
+        } else {
+          // No configured columns, keep defaults
+          setColumns(getDefaultColumns());
         }
+      } else {
+        // API error, keep defaults
+        setColumns(getDefaultColumns());
       }
     } catch (error) {
       console.error("Failed to load columns:", error);
+      // Error, keep defaults
+      setColumns(getDefaultColumns());
     }
   };
 
@@ -68,13 +127,23 @@ const ExcelLikeViewer = () => {
       const response = await fetch("/api/data");
       if (response.ok) {
         const result = await response.json();
-        setData(result.rows || []);
+        if (result.rows && result.rows.length > 0) {
+          setData(result.rows);
+        } else {
+          // No data from backend, keep default empty rows
+          setData(getDefaultRows());
+        }
         if (result.completed) {
           setIsGenerating(false);
         }
+      } else {
+        // API error, keep defaults
+        setData(getDefaultRows());
       }
     } catch (error) {
       console.error("Failed to load data:", error);
+      // Error, keep defaults
+      setData(getDefaultRows());
     }
   };
 
@@ -108,6 +177,8 @@ const ExcelLikeViewer = () => {
         return <List className="w-3 h-3" />;
       case "reference":
         return <Link className="w-3 h-3" />;
+      case "empty":
+        return null;
       default:
         return <FileText className="w-3 h-3" />;
     }
@@ -121,6 +192,8 @@ const ExcelLikeViewer = () => {
         return "bg-green-100 text-green-700 border-green-200";
       case "reference":
         return "bg-purple-100 text-purple-700 border-purple-200";
+      case "empty":
+        return "bg-gray-50 text-gray-400 border-gray-200";
       default:
         return "bg-gray-100 text-gray-700 border-gray-200";
     }
@@ -129,7 +202,7 @@ const ExcelLikeViewer = () => {
   const getColumnDescription = (col) => {
     switch (col.type) {
       case "prompt":
-        return `AI: ${(col.config.prompt || "Generate text").substring(0, 40)}...`;
+        return `AI: ${(col.config.prompt || "Generate text").substring(0, 25)}...`;
       case "choice":
         if (
           typeof col.config.choices === "object" &&
@@ -141,7 +214,9 @@ const ExcelLikeViewer = () => {
         }
         return "Choice: Click to configure";
       case "reference":
-        return `Ref: ${(col.config.template || "Reference other columns").substring(0, 40)}...`;
+        return `Ref: ${(col.config.template || "Reference other columns").substring(0, 25)}...`;
+      case "empty":
+        return "";
       default:
         return "Click to configure";
     }
@@ -158,8 +233,8 @@ const ExcelLikeViewer = () => {
 
   const handleEditColumn = (column) => {
     setSelectedColumn(column);
-    setColumnName(column.name);
-    setSelectedColumnType(column.type);
+    setColumnName(column.name || ""); // Use actual name or empty for new columns
+    setSelectedColumnType(column.type === "empty" ? "prompt" : column.type);
 
     // Set config based on type
     if (column.type === "prompt") {
@@ -172,6 +247,8 @@ const ExcelLikeViewer = () => {
       }
     } else if (column.type === "reference") {
       setColumnConfig(column.config.template || "");
+    } else {
+      setColumnConfig(""); // Empty column
     }
 
     setModalErrors({});
@@ -238,11 +315,12 @@ const ExcelLikeViewer = () => {
     }
 
     try {
-      // Save to backend
-      const method = selectedColumn ? "PUT" : "POST";
-      const url = selectedColumn
-        ? `/api/columns/${selectedColumn.name}`
-        : "/api/columns";
+      // Determine if this is creating a new column or updating existing
+      const isNewColumn = !selectedColumn.name; // New if no name was set before
+      const method = isNewColumn ? "POST" : "PUT";
+      const url = isNewColumn
+        ? "/api/columns"
+        : `/api/columns/${selectedColumn.name}`;
 
       const response = await fetch(url, {
         method,
@@ -251,24 +329,22 @@ const ExcelLikeViewer = () => {
       });
 
       if (!response.ok) {
-        throw new Error("Failed to save column");
+        const errorText = await response.text();
+        console.error("Save column failed:", response.status, errorText);
+        throw new Error(`Failed to save column: ${response.status} - ${errorText}`);
       }
 
       // Update local state
-      if (selectedColumn) {
-        setColumns(
-          columns.map((col) =>
-            col.name === selectedColumn.name ? columnData : col,
-          ),
-        );
-      } else {
-        setColumns([...columns, columnData]);
-      }
+      setColumns(
+        columns.map((col) =>
+          col.header === selectedColumn.header ? { ...columnData, header: col.header } : col,
+        ),
+      );
 
       setShowColumnModal(false);
     } catch (error) {
       console.error("Error saving column:", error);
-      setModalErrors({ save: "Failed to save column. Please try again." });
+      setModalErrors({ save: `Failed to save column: ${error.message}` });
     }
   };
 
@@ -297,8 +373,8 @@ const ExcelLikeViewer = () => {
   };
 
   const handleGenerate = async () => {
-    if (columns.length === 0) {
-      alert("Please add at least one column before generating");
+    if (!hasConfiguredColumns) {
+      alert("Please configure at least one column before generating");
       return;
     }
 
@@ -306,14 +382,14 @@ const ExcelLikeViewer = () => {
     if (!rowCount || isNaN(rowCount)) return;
 
     setIsGenerating(true);
-    setData([]); // Clear existing data
+    setData(getDefaultRows()); // Reset to empty rows
 
     try {
       const response = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          columns: columns,
+          columns: columns.filter(col => col.type !== "empty"), // Only send configured columns
           rowCount: parseInt(rowCount),
         }),
       });
@@ -363,8 +439,10 @@ const ExcelLikeViewer = () => {
     }
   };
 
-  // Show empty state if no columns
-  const isEmpty = columns.length === 0;
+  // Check if we have any configured columns (non-empty)
+  const hasConfiguredColumns = columns.some(col => col.type !== "empty");
+  // Always show spreadsheet view, never show empty state with A-Z columns
+  const isEmpty = false;
 
   return (
     <div className="h-screen bg-gray-50 flex flex-col">
@@ -384,10 +462,10 @@ const ExcelLikeViewer = () => {
                 </span>
               ) : (
                 <>
-                  {columns.length === 0
+                  {!hasConfiguredColumns
                     ? "No columns defined"
-                    : `${columns.length} columns`}
-                  {data.length > 0 && ` • ${data.length} rows generated`}
+                    : `${columns.filter(col => col.type !== "empty").length} columns configured`}
+                  {data.some(row => Object.keys(row).length > 0) && ` • ${data.filter(row => Object.keys(row).length > 0).length} rows generated`}
                 </>
               )}
             </p>
@@ -396,12 +474,12 @@ const ExcelLikeViewer = () => {
           <div className="flex items-center gap-3">
             <button
               className={`px-4 py-2 rounded-lg flex items-center gap-2 font-medium ${
-                columns.length === 0 || isGenerating
+                !hasConfiguredColumns || isGenerating
                   ? "bg-gray-300 text-gray-500 cursor-not-allowed"
                   : "bg-blue-600 text-white hover:bg-blue-700"
               }`}
               onClick={isGenerating ? handleStopGeneration : handleGenerate}
-              disabled={columns.length === 0}
+              disabled={!hasConfiguredColumns}
             >
               {isGenerating ? (
                 <>
@@ -418,12 +496,12 @@ const ExcelLikeViewer = () => {
 
             <button
               className={`px-4 py-2 border rounded-lg flex items-center gap-2 ${
-                data.length === 0
+                !data.some(row => Object.keys(row).length > 0)
                   ? "border-gray-300 text-gray-400 cursor-not-allowed"
                   : "border-gray-300 text-gray-700 hover:bg-gray-50"
               }`}
               onClick={() => handleExport("csv")}
-              disabled={data.length === 0}
+              disabled={!data.some(row => Object.keys(row).length > 0)}
             >
               <Download className="w-4 h-4" />
               Export
@@ -465,13 +543,13 @@ const ExcelLikeViewer = () => {
         ) : (
           // Spreadsheet view
           <div className="h-full overflow-auto">
-            <table className="w-full border-collapse">
+            <table className="w-full border-collapse table-fixed">
               {/* Header Row */}
               <thead className="sticky top-0 z-10">
                 <tr>
                   {/* Row number header */}
-                  <th className="w-12 bg-gray-100 border border-gray-300 p-0">
-                    <div className="h-16 flex items-center justify-center text-xs font-medium text-gray-500">
+                  <th className="w-10 bg-gray-100 border border-gray-300 p-0">
+                    <div className="h-6 flex items-center justify-center text-xs font-medium text-gray-500">
                       #
                     </div>
                   </th>
@@ -479,45 +557,69 @@ const ExcelLikeViewer = () => {
                   {/* Column headers */}
                   {columns.map((col, index) => (
                     <th
-                      key={col.name}
-                      className="bg-gray-100 border border-gray-300 p-0 min-w-48 relative group cursor-pointer hover:bg-gray-200"
+                      key={col.header}
+                      className={`border border-gray-300 p-0 relative group cursor-pointer hover:bg-gray-200 ${
+                        col.type === "empty" ? "bg-gray-50" : "bg-blue-50"
+                      }`}
                       onClick={() => handleEditColumn(col)}
+                      style={{ 
+                        width: columnWidths[col.header] || '96px',
+                        minWidth: '60px',
+                        maxWidth: '300px'
+                      }}
                     >
-                      <div className="h-16 p-3 flex flex-col justify-center">
-                        <div className="flex items-center gap-2 mb-1">
-                          {getColumnIcon(col.type)}
-                          <span className="font-semibold text-gray-900 text-sm">
-                            {col.name}
+                      <div className="h-6 px-2 flex items-center justify-center">
+                        <div className="flex items-center gap-1 w-full">
+                          {col.type !== "empty" && getColumnIcon(col.type)}
+                          <span className={`font-medium text-xs truncate ${
+                            col.type === "empty" ? "text-gray-500" : "text-gray-900"
+                          }`}>
+                            {col.name || col.header}
                           </span>
-                          <button
-                            className="opacity-0 group-hover:opacity-100 text-red-500 hover:text-red-700"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteColumn(col);
-                            }}
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
-                        </div>
-                        <div
-                          className={`inline-flex items-center px-2 py-1 rounded text-xs border ${getColumnBadgeColor(col.type)}`}
-                        >
-                          {getColumnDescription(col)}
+                          {col.name && col.name !== col.header && (
+                            <div className="text-xs text-gray-400 truncate">
+                              {col.header}
+                            </div>
+                          )}
+                          {col.type !== "empty" && (
+                            <div className="w-2 h-2 bg-blue-500 rounded-full ml-auto"></div>
+                          )}
+                          {col.type !== "empty" && (
+                            <button
+                              className="opacity-0 group-hover:opacity-100 text-red-500 hover:text-red-700"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteColumn(col);
+                              }}
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
                         </div>
                       </div>
 
+                      {col.type !== "empty" && getColumnDescription(col) && (
+                        <div className="absolute top-7 left-0 right-0 z-20 bg-gray-800 text-white text-xs p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                          {getColumnDescription(col)}
+                        </div>
+                      )}
+
                       {/* Column resizer */}
-                      <div className="absolute right-0 top-0 w-1 h-full cursor-col-resize hover:bg-blue-500 opacity-0 group-hover:opacity-100"></div>
+                      <div 
+                        className="absolute right-0 top-0 w-2 h-full cursor-col-resize hover:bg-blue-500 opacity-0 group-hover:opacity-100 z-10"
+                        onMouseDown={(e) => handleMouseDown(e, col.header)}
+                        onClick={(e) => e.stopPropagation()}
+                      ></div>
                     </th>
                   ))}
 
                   {/* Add column button */}
-                  <th className="w-16 bg-gray-50 border border-gray-300 p-0">
+                  <th className="w-10 bg-gray-50 border border-gray-300 p-0">
                     <button
-                      className="h-16 w-full flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                      className="h-6 w-full flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100"
                       onClick={handleAddColumn}
                     >
-                      <Plus className="w-5 h-5" />
+                      <Plus className="w-3 h-3" />
                     </button>
                   </th>
                 </tr>
@@ -525,73 +627,62 @@ const ExcelLikeViewer = () => {
 
               {/* Data rows */}
               <tbody>
-                {data.length === 0 ? (
-                  // No data yet
-                  <tr>
-                    <td className="w-12 bg-gray-50 border border-gray-300 text-center text-xs text-gray-500">
-                      1
+                {data.map((row, rowIndex) => (
+                  <tr key={rowIndex} className="hover:bg-blue-50">
+                    <td className="w-10 bg-gray-50 border border-gray-300 text-center text-xs text-gray-500 font-medium">
+                      {rowIndex + 1}
                     </td>
-                    {columns.map((col, index) => (
+
+                    {columns.map((col, colIndex) => (
                       <td
-                        key={index}
-                        className="border border-gray-300 p-3 text-gray-400 italic"
+                        key={`${rowIndex}-${colIndex}`}
+                        className={`border border-gray-300 p-1 cursor-cell relative text-xs ${
+                          selectedCell.row === rowIndex &&
+                          selectedCell.col === colIndex
+                            ? "ring-2 ring-blue-500 bg-blue-50"
+                            : ""
+                        }`}
+                        onClick={() =>
+                          setSelectedCell({ row: rowIndex, col: colIndex })
+                        }
+                        style={{ height: '20px' }}
                       >
-                        Click Generate to create data...
+                        <div className="h-4 flex items-center overflow-hidden">
+                          <span className="text-gray-900 truncate">
+                            {row[col.name || col.header] || ""}
+                          </span>
+                        </div>
                       </td>
                     ))}
-                    <td className="w-16 border border-gray-300 bg-gray-50"></td>
+
+                    <td className="w-10 border border-gray-300 bg-gray-50"></td>
                   </tr>
-                ) : (
-                  // Show data rows
-                  data.map((row, rowIndex) => (
-                    <tr key={rowIndex} className="hover:bg-blue-50">
-                      <td className="w-12 bg-gray-50 border border-gray-300 text-center text-xs text-gray-500 font-medium">
-                        {rowIndex + 1}
-                      </td>
-
-                      {columns.map((col, colIndex) => (
-                        <td
-                          key={`${rowIndex}-${colIndex}`}
-                          className={`border border-gray-300 p-3 cursor-cell relative ${
-                            selectedCell.row === rowIndex &&
-                            selectedCell.col === colIndex
-                              ? "ring-2 ring-blue-500 bg-blue-50"
-                              : ""
-                          }`}
-                          onClick={() =>
-                            setSelectedCell({ row: rowIndex, col: colIndex })
-                          }
-                        >
-                          <div className="min-h-5">
-                            <span className="text-gray-900">
-                              {row[col.name] || ""}
-                            </span>
-                          </div>
-                        </td>
-                      ))}
-
-                      <td className="w-16 border border-gray-300 bg-gray-50"></td>
-                    </tr>
-                  ))
-                )}
+                ))}
 
                 {/* Generating row indicator */}
                 {isGenerating && (
                   <tr>
-                    <td className="w-12 bg-gray-50 border border-gray-300 text-center text-xs text-gray-500">
-                      {data.length + 1}
+                    <td className="w-10 bg-gray-50 border border-gray-300 text-center text-xs text-gray-500">
+                      {data.filter(row => Object.keys(row).length > 0).length + 1}
                     </td>
                     {columns.map((col, index) => (
                       <td
                         key={index}
-                        className="border border-gray-300 p-3 bg-gradient-to-r from-gray-100 via-gray-200 to-gray-100 animate-pulse"
+                        className={`border border-gray-300 p-1 ${
+                          col.type !== "empty" 
+                            ? "bg-gradient-to-r from-gray-100 via-gray-200 to-gray-100 animate-pulse" 
+                            : "bg-gray-50"
+                        }`}
+                        style={{ height: '20px' }}
                       >
-                        <span className="text-gray-400 italic">
-                          Generating...
-                        </span>
+                        {col.type !== "empty" && (
+                          <span className="text-gray-400 italic text-xs">
+                            Generating...
+                          </span>
+                        )}
                       </td>
                     ))}
-                    <td className="w-16 border border-gray-300 bg-gray-50"></td>
+                    <td className="w-10 border border-gray-300 bg-gray-50"></td>
                   </tr>
                 )}
               </tbody>
