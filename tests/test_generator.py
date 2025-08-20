@@ -1,34 +1,37 @@
 """Comprehensive tests for generator module."""
 
+from unittest.mock import MagicMock, Mock, patch
+
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+
 from chatan.generator import (
-    OpenAIGenerator, 
-    AnthropicGenerator, 
-    GeneratorFunction, 
+    AnthropicGenerator,
+    AzureOpenAIGenerator,
     GeneratorClient,
-    generator
+    GeneratorFunction,
+    OpenAIGenerator,
+    generator,
 )
 
 
 class TestOpenAIGenerator:
     """Test OpenAI generator implementation."""
 
-    @patch('openai.OpenAI')
+    @patch("openai.OpenAI")
     def test_init_default_model(self, mock_openai):
         """Test OpenAI generator initialization with default model."""
         gen = OpenAIGenerator("test-key")
         assert gen.model == "gpt-3.5-turbo"
         mock_openai.assert_called_once_with(api_key="test-key")
 
-    @patch('openai.OpenAI')
+    @patch("openai.OpenAI")
     def test_init_custom_model(self, mock_openai):
         """Test OpenAI generator initialization with custom model."""
         gen = OpenAIGenerator("test-key", model="gpt-4", temperature=0.8)
         assert gen.model == "gpt-4"
         assert gen.default_kwargs == {"temperature": 0.8}
 
-    @patch('openai.OpenAI')
+    @patch("openai.OpenAI")
     def test_generate_basic(self, mock_openai):
         """Test basic content generation."""
         # Setup mock
@@ -45,11 +48,10 @@ class TestOpenAIGenerator:
 
         assert result == "Generated content"
         mock_client.chat.completions.create.assert_called_once_with(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Test prompt"}]
+            model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Test prompt"}]
         )
 
-    @patch('openai.OpenAI')
+    @patch("openai.OpenAI")
     def test_generate_with_kwargs(self, mock_openai):
         """Test generation with additional kwargs."""
         mock_client = Mock()
@@ -67,10 +69,10 @@ class TestOpenAIGenerator:
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Test"}],
             temperature=0.5,
-            max_tokens=100
+            max_tokens=100,
         )
 
-    @patch('openai.OpenAI')
+    @patch("openai.OpenAI")
     def test_kwargs_override(self, mock_openai):
         """Test that call-time kwargs override defaults."""
         mock_client = Mock()
@@ -88,17 +90,104 @@ class TestOpenAIGenerator:
         assert call_args[1]["temperature"] == 0.9
 
 
+class TestAzureOpenAIGenerator:
+    """Test Azure OpenAI generator implementation."""
+
+    @patch("openai.AzureOpenAI")
+    def test_init_default_model(self, mock_openai):
+        """Test Azure OpenAI generator initialization with default model."""
+        gen = AzureOpenAIGenerator(
+            "test-key", azure_endpoint="https://example.com", api_version="2024-02-01"
+        )
+        assert gen.model == "gpt-35-turbo"
+        mock_openai.assert_called_once_with(
+            api_key="test-key",
+            api_version="2024-02-01",
+            azure_endpoint="https://example.com",
+        )
+
+    @patch("openai.AzureOpenAI")
+    def test_generate_basic(self, mock_openai):
+        """Test basic content generation."""
+        mock_client = Mock()
+        mock_response = Mock()
+        mock_choice = Mock()
+        mock_choice.message.content = "  Generated content  "
+        mock_response.choices = [mock_choice]
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_openai.return_value = mock_client
+
+        gen = AzureOpenAIGenerator(
+            "test-key", azure_endpoint="https://example.com", api_version="2024-02-01"
+        )
+        result = gen.generate("Test prompt")
+
+        assert result == "Generated content"
+        mock_client.chat.completions.create.assert_called_once_with(
+            model="gpt-35-turbo",
+            messages=[{"role": "user", "content": "Test prompt"}],
+        )
+
+    @patch("openai.AzureOpenAI")
+    def test_generate_with_kwargs(self, mock_openai):
+        """Test generation with additional kwargs."""
+        mock_client = Mock()
+        mock_response = Mock()
+        mock_choice = Mock()
+        mock_choice.message.content = "Generated"
+        mock_response.choices = [mock_choice]
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_openai.return_value = mock_client
+
+        gen = AzureOpenAIGenerator(
+            "test-key",
+            azure_endpoint="https://example.com",
+            api_version="2024-02-01",
+            temperature=0.5,
+        )
+        result = gen.generate("Test", max_tokens=100)
+
+        mock_client.chat.completions.create.assert_called_once_with(
+            model="gpt-35-turbo",
+            messages=[{"role": "user", "content": "Test"}],
+            temperature=0.5,
+            max_tokens=100,
+        )
+
+    @patch("openai.AzureOpenAI")
+    def test_kwargs_override(self, mock_openai):
+        """Test that call-time kwargs override defaults."""
+        mock_client = Mock()
+        mock_response = Mock()
+        mock_choice = Mock()
+        mock_choice.message.content = "Generated"
+        mock_response.choices = [mock_choice]
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_openai.return_value = mock_client
+
+        gen = AzureOpenAIGenerator(
+            "test-key",
+            azure_endpoint="https://example.com",
+            api_version="2024-02-01",
+            temperature=0.5,
+        )
+        gen.generate("Test", temperature=0.9)
+
+        call_args = mock_client.chat.completions.create.call_args
+        assert call_args[1]["temperature"] == 0.9
+
+
 class TestAnthropicGenerator:
     """Test Anthropic generator implementation."""
 
-    @patch('anthropic.Anthropic')
+    @patch("anthropic.Anthropic")
     def test_init_default_model(self, mock_anthropic):
         """Test Anthropic generator initialization."""
         gen = AnthropicGenerator("test-key")
         assert gen.model == "claude-3-sonnet-20240229"
         mock_anthropic.assert_called_once_with(api_key="test-key")
 
-    @patch('anthropic.Anthropic')
+    @patch("anthropic.Anthropic")
     def test_generate_basic(self, mock_anthropic):
         """Test basic content generation."""
         mock_client = Mock()
@@ -116,10 +205,10 @@ class TestAnthropicGenerator:
         mock_client.messages.create.assert_called_once_with(
             model="claude-3-sonnet-20240229",
             messages=[{"role": "user", "content": "Test prompt"}],
-            max_tokens=1000
+            max_tokens=1000,
         )
 
-    @patch('anthropic.Anthropic')
+    @patch("anthropic.Anthropic")
     def test_max_tokens_extraction(self, mock_anthropic):
         """Test that max_tokens is extracted from kwargs."""
         mock_client = Mock()
@@ -145,10 +234,10 @@ class TestGeneratorFunction:
         """Test template variable substitution."""
         mock_generator = Mock()
         mock_generator.generate.return_value = "Generated content"
-        
+
         func = GeneratorFunction(mock_generator, "Write about {topic} in {style}")
         result = func({"topic": "AI", "style": "casual"})
-        
+
         assert result == "Generated content"
         mock_generator.generate.assert_called_once_with("Write about AI in casual")
 
@@ -156,7 +245,7 @@ class TestGeneratorFunction:
         """Test behavior with missing context variables."""
         mock_generator = Mock()
         func = GeneratorFunction(mock_generator, "Write about {topic}")
-        
+
         with pytest.raises(KeyError):
             func({"wrong_key": "value"})
 
@@ -164,10 +253,10 @@ class TestGeneratorFunction:
         """Test behavior with extra context variables."""
         mock_generator = Mock()
         mock_generator.generate.return_value = "Generated"
-        
+
         func = GeneratorFunction(mock_generator, "Write about {topic}")
         result = func({"topic": "AI", "extra": "ignored"})
-        
+
         assert result == "Generated"
         mock_generator.generate.assert_called_once_with("Write about AI")
 
@@ -175,29 +264,48 @@ class TestGeneratorFunction:
 class TestGeneratorClient:
     """Test GeneratorClient interface."""
 
-    @patch('chatan.generator.OpenAIGenerator')
+    @patch("chatan.generator.OpenAIGenerator")
     def test_openai_client_creation(self, mock_openai_gen):
         """Test OpenAI client creation."""
         client = GeneratorClient("openai", "test-key", temperature=0.7)
         mock_openai_gen.assert_called_once_with("test-key", temperature=0.7)
 
-    @patch('chatan.generator.AnthropicGenerator')
+    @patch("chatan.generator.AnthropicGenerator")
     def test_anthropic_client_creation(self, mock_anthropic_gen):
         """Test Anthropic client creation."""
-        client = GeneratorClient("anthropic", "test-key", model="claude-3-opus-20240229")
-        mock_anthropic_gen.assert_called_once_with("test-key", model="claude-3-opus-20240229")
+        client = GeneratorClient(
+            "anthropic", "test-key", model="claude-3-opus-20240229"
+        )
+        mock_anthropic_gen.assert_called_once_with(
+            "test-key", model="claude-3-opus-20240229"
+        )
+
+    @patch("chatan.generator.AzureOpenAIGenerator")
+    def test_azure_openai_client_creation(self, mock_azure_gen):
+        """Test Azure OpenAI client creation."""
+        client = GeneratorClient(
+            "azure-openai",
+            "test-key",
+            azure_endpoint="https://example.com",
+            api_version="2024-02-01",
+        )
+        mock_azure_gen.assert_called_once_with(
+            "test-key",
+            azure_endpoint="https://example.com",
+            api_version="2024-02-01",
+        )
 
     def test_unsupported_provider(self):
         """Test error handling for unsupported providers."""
         with pytest.raises(ValueError, match="Unsupported provider: invalid"):
             GeneratorClient("invalid", "test-key")
 
-    @patch('chatan.generator.OpenAIGenerator')
+    @patch("chatan.generator.OpenAIGenerator")
     def test_callable_returns_generator_function(self, mock_openai_gen):
         """Test that calling client returns GeneratorFunction."""
         client = GeneratorClient("openai", "test-key")
         func = client("Template {var}")
-        
+
         assert isinstance(func, GeneratorFunction)
         assert func.prompt_template == "Template {var}"
 
@@ -210,13 +318,13 @@ class TestGeneratorFactory:
         with pytest.raises(ValueError, match="API key is required"):
             generator("openai")
 
-    @patch('chatan.generator.GeneratorClient')
+    @patch("chatan.generator.GeneratorClient")
     def test_factory_creates_client(self, mock_client):
         """Test factory function creates GeneratorClient."""
         result = generator("openai", "test-key", temperature=0.5)
         mock_client.assert_called_once_with("openai", "test-key", temperature=0.5)
 
-    @patch('chatan.generator.GeneratorClient')
+    @patch("chatan.generator.GeneratorClient")
     def test_default_provider(self, mock_client):
         """Test default provider is openai."""
         generator(api_key="test-key")
@@ -226,7 +334,7 @@ class TestGeneratorFactory:
 class TestIntegration:
     """Integration tests for generator components."""
 
-    @patch('openai.OpenAI')
+    @patch("openai.OpenAI")
     def test_end_to_end_openai(self, mock_openai):
         """Test complete OpenAI generation pipeline."""
         # Setup mock
@@ -246,10 +354,37 @@ class TestIntegration:
         assert result == "The capital of France is Paris."
         mock_client.chat.completions.create.assert_called_once_with(
             model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "What is the capital of France?"}]
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
         )
 
-    @patch('anthropic.Anthropic')
+    @patch("openai.AzureOpenAI")
+    def test_end_to_end_azure_openai(self, mock_openai):
+        """Test complete Azure OpenAI generation pipeline."""
+        # Setup mock
+        mock_client = Mock()
+        mock_response = Mock()
+        mock_choice = Mock()
+        mock_choice.message.content = "The capital of France is Paris."
+        mock_response.choices = [mock_choice]
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_openai.return_value = mock_client
+
+        gen = generator(
+            "azure-openai",
+            "test-key",
+            azure_endpoint="https://example.com",
+            api_version="2024-02-01",
+        )
+        func = gen("What is the capital of {country}?")
+        result = func({"country": "France"})
+
+        assert result == "The capital of France is Paris."
+        mock_client.chat.completions.create.assert_called_once_with(
+            model="gpt-35-turbo",
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+        )
+
+    @patch("anthropic.Anthropic")
     def test_end_to_end_anthropic(self, mock_anthropic):
         """Test complete Anthropic generation pipeline."""
         # Setup mock
@@ -268,7 +403,7 @@ class TestIntegration:
 
         assert result == "Python is a programming language."
 
-    @patch('openai.OpenAI')
+    @patch("openai.OpenAI")
     def test_multiple_generations(self, mock_openai):
         """Test multiple generations with same generator."""
         mock_client = Mock()
@@ -281,15 +416,15 @@ class TestIntegration:
 
         gen = generator("openai", "test-key")
         func = gen("Generate {type}")
-        
+
         result1 = func({"type": "poem"})
         result2 = func({"type": "story"})
-        
+
         assert result1 == "Response"
         assert result2 == "Response"
         assert mock_client.chat.completions.create.call_count == 2
 
-    @patch('openai.OpenAI')
+    @patch("openai.OpenAI")
     def test_generator_function_with_variables(self, mock_openai):
         """GeneratorFunction should accept default variables."""
         mock_client = Mock()
@@ -307,24 +442,33 @@ class TestIntegration:
         assert result == "Question about elephants"
         mock_client.chat.completions.create.assert_called_once_with(
             model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Question about elephants"}]
+            messages=[{"role": "user", "content": "Question about elephants"}],
         )
 
     def test_case_insensitive_provider(self):
         """Test that provider names are case insensitive."""
-        with patch('chatan.generator.OpenAIGenerator') as mock_gen:
+        with patch("chatan.generator.OpenAIGenerator") as mock_gen:
             generator("OPENAI", "test-key")
             mock_gen.assert_called_once()
-            
-        with patch('chatan.generator.AnthropicGenerator') as mock_gen:
+
+        with patch("chatan.generator.AnthropicGenerator") as mock_gen:
             generator("ANTHROPIC", "test-key")
+            mock_gen.assert_called_once()
+
+        with patch("chatan.generator.AzureOpenAIGenerator") as mock_gen:
+            generator(
+                "AZURE-OPENAI",
+                "test-key",
+                azure_endpoint="https://example.com",
+                api_version="2024-02-01",
+            )
             mock_gen.assert_called_once()
 
 
 class TestErrorHandling:
     """Test error handling scenarios."""
 
-    @patch('openai.OpenAI')
+    @patch("openai.OpenAI")
     def test_openai_api_error(self, mock_openai):
         """Test handling of OpenAI API errors."""
         mock_client = Mock()
@@ -335,7 +479,7 @@ class TestErrorHandling:
         with pytest.raises(Exception, match="API Error"):
             gen.generate("Test prompt")
 
-    @patch('anthropic.Anthropic')
+    @patch("anthropic.Anthropic")
     def test_anthropic_api_error(self, mock_anthropic):
         """Test handling of Anthropic API errors."""
         mock_client = Mock()
@@ -350,8 +494,8 @@ class TestErrorHandling:
         """Test handling of empty responses."""
         mock_generator = Mock()
         mock_generator.generate.return_value = "   "  # Whitespace only
-        
+
         func = GeneratorFunction(mock_generator, "Generate {thing}")
         result = func({"thing": "content"})
-        
+
         assert result == ""  # Should be stripped to empty string

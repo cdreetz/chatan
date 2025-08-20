@@ -15,6 +15,13 @@ import chatan
 
 # Create a generator
 gen = chatan.generator("openai", "YOUR_API_KEY")
+# or Azure OpenAI
+# gen = chatan.generator(
+#     "azure-openai",
+#     "YOUR_AZURE_API_KEY",
+#     azure_endpoint="https://YOUR-RESOURCE.openai.azure.com/",
+#     api_version="2024-02-01"
+# )
 
 # Define a dataset schema
 ds = chatan.dataset({
