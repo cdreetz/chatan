@@ -18,8 +18,15 @@ Basic Usage
    .. code-block:: python
 
       import chatan
-      
+
       gen = chatan.generator("openai", "YOUR_OPENAI_API_KEY")
+      # or for Azure OpenAI
+      # gen = chatan.generator(
+      #     "azure-openai",
+      #     "YOUR_AZURE_API_KEY",
+      #     azure_endpoint="https://YOUR-RESOURCE.openai.azure.com/",
+      #     api_version="2024-02-01"
+      # )
       # or for Anthropic
       # gen = chatan.generator("anthropic", "YOUR_ANTHROPIC_API_KEY")
 
@@ -47,7 +54,7 @@ Core Concepts
 -------------
 
 **Generators**
-   Use LLMs to create text content. Support OpenAI and Anthropic APIs.
+   Use LLMs to create text content. Support OpenAI, Azure OpenAI, and Anthropic APIs.
 
 **Samplers** 
    Create structured data like UUIDs, choices, ranges, dates.
