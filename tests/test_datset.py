@@ -1,6 +1,5 @@
 """Basic tests for chatan package."""
 
-import pytest
 import pandas as pd
 from unittest.mock import Mock, patch
 from chatan import dataset, generator, sample

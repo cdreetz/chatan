@@ -4,8 +4,16 @@ __version__ = "0.2.0"
 
 from .dataset import dataset
 from .evaluate import eval, evaluate
-from .generator import generator
+from .generator import generator, async_generator
 from .sampler import sample
 from .viewer import generate_with_viewer
 
-__all__ = ["dataset", "generator", "sample", "generate_with_viewer", "evaluate", "eval"]
+__all__ = [
+    "dataset",
+    "generator",
+    "async_generator",
+    "sample",
+    "generate_with_viewer",
+    "evaluate",
+    "eval",
+]

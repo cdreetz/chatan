@@ -1,6 +1,6 @@
 """Dataset creation and manipulation."""
 
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
 from datasets import Dataset as HFDataset

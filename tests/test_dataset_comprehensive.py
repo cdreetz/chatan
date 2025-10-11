@@ -4,7 +4,7 @@ import pytest
 import pandas as pd
 import tempfile
 import os
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 from datasets import Dataset as HFDataset
 
 from chatan.dataset import Dataset, dataset
