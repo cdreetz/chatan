@@ -67,8 +67,6 @@ all = [
 [dependency-groups]
 dev = [
     "pytest>=7.0",
-    "black>=22.0",
-    "isort>=5.0",
     "mypy>=1.0",
     "pytest-cov>=4.0",
     "sphinx>=7.1.2",
@@ -94,13 +92,9 @@ path = "src/chatan/__init__.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/chatan"]
 
-[tool.black]
+[tool.ruff]
 line-length = 88
-target-version = ['py38']
-
-[tool.isort]
-profile = "black"
-multi_line_output = 3
+target-version = "py38"
 
 [tool.mypy]
 python_version = "3.8"

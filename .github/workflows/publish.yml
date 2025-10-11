@@ -36,7 +36,6 @@ jobs:
       - name: Run linting
         run: |
           uv run ruff check src/
-          uv run isort --check-only src/
 
   build:
     runs-on: ubuntu-latest
