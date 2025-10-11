@@ -1,14 +1,20 @@
 """Comprehensive tests for generator module."""
 
+import asyncio
 import pytest
-import sys
 from unittest.mock import Mock, patch, MagicMock
 from chatan.generator import (
     OpenAIGenerator,
     AnthropicGenerator,
+    AsyncOpenAIGenerator,
+    AsyncAnthropicGenerator,
+    AsyncBaseGenerator,
     GeneratorFunction,
+    AsyncGeneratorFunction,
     GeneratorClient,
-    generator
+    AsyncGeneratorClient,
+    generator,
+    async_generator,
 )
 
 # Conditional imports for torch-dependent tests
@@ -97,6 +103,33 @@ class TestOpenAIGenerator:
         assert call_args[1]["temperature"] == 0.9
 
 
+@pytest.mark.asyncio
+class TestAsyncOpenAIGenerator:
+    """Test async OpenAI generator implementation."""
+
+    @patch('openai.AsyncOpenAI')
+    async def test_async_generate_basic(self, mock_async_openai):
+        """Test asynchronous content generation."""
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_choice = MagicMock()
+        mock_choice.message.content = "Async content"
+        mock_response.choices = [mock_choice]
+        mock_client.chat.completions.create.return_value = asyncio.Future()
+        mock_client.chat.completions.create.return_value.set_result(mock_response)
+        mock_async_openai.return_value = mock_client
+
+        gen = AsyncOpenAIGenerator("test-key")
+        result = await gen.generate("Prompt")
+
+        assert result == "Async content"
+        mock_client.chat.completions.create.assert_called_once_with(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Prompt"}]
+        )
+
+
 class TestAnthropicGenerator:
     """Test Anthropic generator implementation."""
 
@@ -145,6 +178,35 @@ class TestAnthropicGenerator:
         call_args = mock_client.messages.create.call_args
         assert call_args[1]["max_tokens"] == 500
         assert call_args[1]["temperature"] == 0.7
+
+
+@pytest.mark.asyncio
+class TestAsyncAnthropicGenerator:
+    """Test async Anthropic generator implementation."""
+
+    @patch('anthropic.AsyncAnthropic')
+    async def test_async_generate_basic(self, mock_async_anthropic):
+        """Test asynchronous content generation."""
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_content = MagicMock()
+        mock_content.text = "Async Claude"
+        mock_response.content = [mock_content]
+        future = asyncio.Future()
+        future.set_result(mock_response)
+        mock_client.messages.create.return_value = future
+        mock_async_anthropic.return_value = mock_client
+
+        gen = AsyncAnthropicGenerator("test-key")
+        result = await gen.generate("Prompt")
+
+        assert result == "Async Claude"
+        mock_client.messages.create.assert_called_once_with(
+            model="claude-3-sonnet-20240229",
+            messages=[{"role": "user", "content": "Prompt"}],
+            max_tokens=1000
+        )
 
 
 @pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not available")
@@ -202,9 +264,77 @@ class TestGeneratorFunction:
         
         func = GeneratorFunction(mock_generator, "Write about {topic}")
         result = func({"topic": "AI", "extra": "ignored"})
-        
+
         assert result == "Generated"
         mock_generator.generate.assert_called_once_with("Write about AI")
+
+
+@pytest.mark.asyncio
+class TestAsyncGeneratorFunction:
+    """Test AsyncGeneratorFunction and its helpers."""
+
+    async def test_async_call(self):
+        """Ensure async call formats prompt and strips whitespace."""
+
+        class DummyAsyncGenerator(AsyncBaseGenerator):
+            async def generate(self, prompt: str, **kwargs) -> str:
+                return f"  {prompt.upper()}  "
+
+        func = AsyncGeneratorFunction(DummyAsyncGenerator(), "Hello {name}")
+        result = await func({"name": "world"})
+        assert result == "HELLO WORLD"
+
+    async def test_stream_concurrency(self):
+        """Ensure stream runs with bounded concurrency and preserves order."""
+
+        class ConcurrentGenerator(AsyncBaseGenerator):
+            def __init__(self):
+                self.active = 0
+                self.max_active = 0
+
+            async def generate(self, prompt: str, **kwargs) -> str:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+                try:
+                    await asyncio.sleep(0.01)
+                    return prompt
+                finally:
+                    self.active -= 1
+
+        generator = ConcurrentGenerator()
+        func = AsyncGeneratorFunction(generator, "item {value}")
+        contexts = [{"value": i} for i in range(4)]
+
+        results = []
+        async for value in func.stream(contexts, concurrency=2):
+            results.append(value)
+
+        assert results == [f"item {i}" for i in range(4)]
+        assert generator.max_active == 2
+
+    async def test_stream_exceptions(self):
+        """Ensure exceptions can be captured or raised."""
+
+        class FailingGenerator(AsyncBaseGenerator):
+            async def generate(self, prompt: str, **kwargs) -> str:
+                if "fail" in prompt:
+                    raise ValueError("boom")
+                return prompt
+
+        func = AsyncGeneratorFunction(FailingGenerator(), "{value}")
+        contexts = [{"value": "ok"}, {"value": "fail"}, {"value": "later"}]
+
+        results = []
+        async for value in func.stream(contexts, return_exceptions=True):
+            results.append(value)
+
+        assert isinstance(results[1], ValueError)
+        assert results[0] == "ok"
+        assert results[2] == "later"
+
+        with pytest.raises(ValueError):
+            async for _ in func.stream(contexts):
+                pass
 
 
 class TestGeneratorClient:
@@ -251,6 +381,32 @@ class TestGeneratorClient:
         assert func.prompt_template == "Template {var}"
 
 
+class TestAsyncGeneratorClient:
+    """Test AsyncGeneratorClient interface."""
+
+    @patch('chatan.generator.AsyncOpenAIGenerator')
+    def test_openai_async_client_creation(self, mock_openai_gen):
+        client = AsyncGeneratorClient("openai", "test-key", temperature=0.2)
+        mock_openai_gen.assert_called_once_with("test-key", temperature=0.2)
+
+    @patch('chatan.generator.AsyncAnthropicGenerator')
+    def test_anthropic_async_client_creation(self, mock_anthropic_gen):
+        client = AsyncGeneratorClient("anthropic", "test-key", model="claude")
+        mock_anthropic_gen.assert_called_once_with("test-key", model="claude")
+
+    def test_async_unsupported_provider(self):
+        with pytest.raises(ValueError, match="Unsupported provider"):
+            AsyncGeneratorClient("invalid", "key")
+
+    @patch('chatan.generator.AsyncOpenAIGenerator')
+    def test_callable_returns_async_function(self, mock_openai_gen):
+        client = AsyncGeneratorClient("openai", "test-key")
+        func = client("Template {var}")
+
+        assert isinstance(func, AsyncGeneratorFunction)
+        assert func.prompt_template == "Template {var}"
+
+
 class TestGeneratorFactory:
     """Test generator factory function."""
 
@@ -276,6 +432,25 @@ class TestGeneratorFactory:
         """Transformers provider should not require API key."""
         generator("transformers", model="gpt2")
         mock_client.assert_called_once_with("transformers", None, model="gpt2")
+
+
+class TestAsyncGeneratorFactory:
+    """Test async generator factory function."""
+
+    def test_missing_api_key(self):
+        with pytest.raises(ValueError, match="API key is required"):
+            async_generator("openai")
+
+    @patch('chatan.generator.AsyncGeneratorClient')
+    def test_factory_creates_client(self, mock_client):
+        result = async_generator("openai", "test-key", temperature=0.5)
+        mock_client.assert_called_once_with("openai", "test-key", temperature=0.5)
+        assert result is mock_client.return_value
+
+    @patch('chatan.generator.AsyncGeneratorClient')
+    def test_default_provider(self, mock_client):
+        async_generator(api_key="test-key")
+        mock_client.assert_called_once_with("openai", "test-key")
 
 
 class TestIntegration:
