@@ -60,7 +60,8 @@ class LiveViewer:
         try:
             with open(self.data_file, "r") as f:
                 data = json.load(f)
-        except:
+        except Exception as e:
+            print(f"Add row exception: {e}")
             data = {"rows": [], "completed": False, "current_row": None}
 
         data["rows"].append(row)
@@ -79,7 +80,8 @@ class LiveViewer:
         try:
             with open(self.data_file, "r") as f:
                 data = json.load(f)
-        except:
+        except Exception as e:
+            print(f"Start row exception: {e}")
             data = {"rows": [], "completed": False, "current_row": None}
 
         data["current_row"] = {"index": row_index, "cells": {}}
@@ -95,7 +97,8 @@ class LiveViewer:
         try:
             with open(self.data_file, "r") as f:
                 data = json.load(f)
-        except:
+        except Exception as e:
+            print(f"Update cell exception: {e}")
             data = {"rows": [], "completed": False, "current_row": None}
 
         if data.get("current_row"):
@@ -112,7 +115,8 @@ class LiveViewer:
         try:
             with open(self.data_file, "r") as f:
                 data = json.load(f)
-        except:
+        except Exception as e:
+            print(f"Complete exception: {e}")
             data = {"rows": [], "completed": False, "current_row": None}
 
         data["completed"] = True

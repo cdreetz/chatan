@@ -2,7 +2,6 @@
 
 import asyncio
 import gc
-import os
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Iterable, Optional
 
@@ -244,7 +243,8 @@ class TransformersGenerator(BaseGenerator):
             if hasattr(self, "tokenizer") and self.tokenizer is not None:
                 del self.tokenizer
             self._clear_cache()
-        except:
+        except Exception as e:
+            print(f"Cleanup failed with exception: {e}")
             pass
 
 

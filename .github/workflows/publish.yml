@@ -35,7 +35,7 @@ jobs:
 
       - name: Run linting
         run: |
-          uv run black --check src/
+          uv run ruff check src/
           uv run isort --check-only src/
 
   build:
@@ -80,3 +80,4 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+

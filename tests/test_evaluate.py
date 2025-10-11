@@ -1,11 +1,9 @@
 """Comprehensive tests for evaluate module."""
 
 import pytest
-import sys
 import pandas as pd
 import numpy as np
-from unittest.mock import Mock, patch, MagicMock
-from datasets import Dataset as HFDataset
+from unittest.mock import Mock, patch
 
 from chatan.evaluate import (
     ExactMatchEvaluator,
@@ -16,7 +14,7 @@ from chatan.evaluate import (
     evaluate,
     eval
 )
-from chatan.dataset import Dataset, dataset
+from chatan.dataset import dataset
 from chatan.sampler import ChoiceSampler
 
 # Check for optional dependencies at module level
@@ -384,7 +382,6 @@ class TestDatasetEvaluator:
     @pytest.mark.skipif(not SEMANTIC_SIMILARITY_AVAILABLE, reason="sentence-transformers not available")
     def test_semantic_similarity_creation(self):
         """Test semantic similarity evaluation function creation."""
-        from chatan.evaluate import SemanticSimilarityEvaluator
         
         with patch('chatan.evaluate.SemanticSimilarityEvaluator') as mock_evaluator_class:
             mock_dataset = Mock()
@@ -435,7 +432,6 @@ class TestEvalNamespace:
     @pytest.mark.skipif(not SEMANTIC_SIMILARITY_AVAILABLE, reason="sentence-transformers not available")
     def test_semantic_similarity_schema_function(self):
         """Test semantic similarity function for schema use."""
-        from chatan.evaluate import SemanticSimilarityEvaluator
         
         with patch('chatan.evaluate.SemanticSimilarityEvaluator') as mock_evaluator_class:
             mock_evaluator = Mock()
@@ -451,7 +447,6 @@ class TestEvalNamespace:
     @pytest.mark.skipif(not BLEU_AVAILABLE, reason="NLTK not available")
     def test_bleu_score_schema_function(self):
         """Test BLEU score function for schema use."""
-        from chatan.evaluate import BLEUEvaluator
         
         with patch('chatan.evaluate.BLEUEvaluator') as mock_evaluator_class:
             mock_evaluator = Mock()
