@@ -1,6 +1,6 @@
 """Minos: Create synthetic datasets with LLM generators and samplers."""
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 from .dataset import dataset
 from .evaluate import eval, evaluate
