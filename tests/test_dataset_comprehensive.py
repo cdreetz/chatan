@@ -1,5 +1,6 @@
 """Comprehensive tests for dataset module."""
 
+import asyncio
 import pytest
 import pandas as pd
 import tempfile
@@ -8,7 +9,7 @@ from unittest.mock import Mock, patch
 from datasets import Dataset as HFDataset
 
 from chatan.dataset import Dataset, dataset
-from chatan.generator import GeneratorFunction
+from chatan.generator import GeneratorFunction, AsyncGeneratorFunction, AsyncBaseGenerator
 from chatan.sampler import ChoiceSampler, UUIDSampler
 
 
@@ -193,6 +194,50 @@ class TestDataGeneration:
         assert len(df) == 2
         assert all(df["content"].str.startswith("Generated: Create content for"))
         assert mock_generator.generate.call_count == 2
+
+
+class DummyAsyncGenerator(AsyncBaseGenerator):
+    async def generate(self, prompt: str, **kwargs) -> str:
+        await asyncio.sleep(0)
+        return prompt.upper()
+
+
+class TestAsyncIntegration:
+    """Tests for async generator integration within Dataset."""
+
+    def test_async_generator_function_sync_usage(self):
+        """Dataset.generate should resolve async generator results synchronously."""
+
+        async_func = AsyncGeneratorFunction(DummyAsyncGenerator(), "hello {name}")
+        schema = {"name": lambda _: "world", "greeting": async_func}
+        ds = Dataset(schema, n=1)
+
+        df = ds.generate(progress=False)
+
+        assert df.loc[0, "greeting"] == "HELLO WORLD"
+
+    @pytest.mark.asyncio
+    async def test_generate_async(self):
+        """Dataset.generate_async should await async generator functions."""
+
+        async_func = AsyncGeneratorFunction(DummyAsyncGenerator(), "hello {name}")
+        schema = {"name": lambda _: "world", "greeting": async_func}
+        ds = Dataset(schema, n=2)
+
+        df = await ds.generate_async(progress=False)
+
+        assert list(df["greeting"]) == ["HELLO WORLD", "HELLO WORLD"]
+
+    @pytest.mark.asyncio
+    async def test_generate_inside_event_loop_requires_async(self):
+        """Calling generate within a running loop should raise a helpful error."""
+
+        async_func = AsyncGeneratorFunction(DummyAsyncGenerator(), "hello {name}")
+        schema = {"name": lambda _: "world", "greeting": async_func}
+        ds = Dataset(schema, n=1)
+
+        with pytest.raises(RuntimeError, match="generate_async"):
+            ds.generate(progress=False)
 
     def test_lambda_function_generation(self):
         """Test generation with lambda functions."""

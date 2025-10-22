@@ -1,13 +1,15 @@
 """Dataset creation and manipulation."""
 
-from typing import Any, Callable, Dict, List, Optional, Union
+import asyncio
+import inspect
+from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
 from datasets import Dataset as HFDataset
 from tqdm import tqdm
 
 from .evaluate import DatasetEvaluator, EvaluationFunction
-from .generator import GeneratorFunction
+from .generator import GeneratorFunction, AsyncGeneratorFunction
 from .sampler import SampleFunction
 
 
@@ -97,7 +99,7 @@ class Dataset:
 
         for column, func in self.schema.items():
             deps = []
-            if isinstance(func, GeneratorFunction):
+            if isinstance(func, (GeneratorFunction, AsyncGeneratorFunction)):
                 # Extract column references from prompt template
                 import re
 
@@ -136,13 +138,84 @@ class Dataset:
         """Generate a single value for a column."""
         func = self.schema[column]
 
+        if isinstance(func, AsyncGeneratorFunction):
+            return self._resolve_sync(func(context))
+
         if isinstance(func, (GeneratorFunction, SampleFunction)):
-            return func(context)
+            return self._resolve_sync(func(context))
         elif callable(func):
-            return func(context)
+            return self._resolve_sync(func(context))
         else:
             # Static value
             return func
+
+    async def _generate_value_async(self, column: str, context: Dict[str, Any]) -> Any:
+        """Generate a single value for a column within an async context."""
+        func = self.schema[column]
+
+        if isinstance(func, AsyncGeneratorFunction):
+            return await func(context)
+
+        if isinstance(func, (GeneratorFunction, SampleFunction)):
+            result = func(context)
+        elif callable(func):
+            result = func(context)
+        else:
+            return func
+
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
+    @staticmethod
+    def _resolve_sync(value: Any) -> Any:
+        """Resolve awaitables when running in synchronous context."""
+
+        if inspect.isawaitable(value):
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return asyncio.run(value)
+
+            raise RuntimeError(
+                "Encountered awaitable while generating dataset inside an active "
+                "event loop. Use `await Dataset.generate_async(...)` instead."
+            )
+
+        return value
+
+    async def generate_async(
+        self,
+        n: Optional[int] = None,
+        progress: bool = True,
+    ) -> pd.DataFrame:
+        """Asynchronously generate the dataset.
+
+        This method mirrors :meth:`generate` but awaits async generators and
+        callables directly, making it safe to invoke from within an existing
+        event loop.
+        """
+
+        num_samples = n or self.n
+        show_progress = progress
+
+        dependencies = self._build_dependency_graph()
+        execution_order = self._topological_sort(dependencies)
+
+        data = []
+        iterator = range(num_samples)
+        if show_progress:
+            iterator = tqdm(iterator, desc="Generating", leave=False)
+
+        for _ in iterator:
+            row = {}
+            for column in execution_order:
+                value = await self._generate_value_async(column, row)
+                row[column] = value
+            data.append(row)
+
+        self._data = pd.DataFrame(data)
+        return self._data
 
     def to_pandas(self) -> pd.DataFrame:
         """Convert to pandas DataFrame."""
