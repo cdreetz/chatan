@@ -5,7 +5,7 @@ dependencies efficiently using asyncio.Event coordination.
 """
 
 import asyncio
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Optional, Union
 import pandas as pd
 from tqdm.asyncio import tqdm as async_tqdm
 
