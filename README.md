@@ -24,20 +24,25 @@ pip install chatan[all]
 ## Getting Started
 
 ```python
+import asyncio
 import chatan
 
-# Create a generator
-gen = chatan.generator("openai", "YOUR_API_KEY")
+async def main():
+    # Create a generator
+    gen = chatan.generator("openai", "YOUR_API_KEY")
 
-# Define a dataset schema
-ds = chatan.dataset({
-    "topic": chatan.sample.choice(["Python", "JavaScript", "Rust"]),
-    "prompt": gen("write a programming question about {topic}"),
-    "response": gen("answer this question: {prompt}")
-})
+    # Define a dataset schema
+    ds = chatan.dataset({
+        "topic": chatan.sample.choice(["Python", "JavaScript", "Rust"]),
+        "prompt": gen("write a programming question about {topic}"),
+        "response": gen("answer this question: {prompt}")
+    })
 
-# Generate the data with a progress bar
-df = ds.generate(n=10)
+    # Generate the data (async for concurrent API calls)
+    df = await ds.generate(n=10)
+    return df
+
+df = asyncio.run(main())
 ```
 
 ## Generator Options
@@ -62,39 +67,52 @@ gen = chatan.generator("transformers", model="microsoft/DialoGPT-medium")
 Create Data Mixes
 
 ```python
+import asyncio
 from chatan import dataset, generator, sample
-import uuid
 
-gen = generator("openai", "YOUR_API_KEY")
+async def main():
+    gen = generator("openai", "YOUR_API_KEY")
 
-mix = [
-    "san antonio, tx",
-    "marfa, tx",
-    "paris, fr"
-]
+    mix = [
+        "san antonio, tx",
+        "marfa, tx",
+        "paris, fr"
+    ]
 
-ds = dataset({
-    "id": sample.uuid(),
-    "topic": sample.choice(mix),
-    "prompt": gen("write an example question about the history of {topic}"),
-    "response": gen("respond to: {prompt}"),
-})
+    ds = dataset({
+        "id": sample.uuid(),
+        "topic": sample.choice(mix),
+        "prompt": gen("write an example question about the history of {topic}"),
+        "response": gen("respond to: {prompt}"),
+    })
+
+    df = await ds.generate(n=100)
+    return df
+
+df = asyncio.run(main())
 ```
 
 Augment datasets
 
 ```python
+import asyncio
 from chatan import generator, dataset, sample
 from datasets import load_dataset
 
-gen = generator("openai", "YOUR_API_KEY")
-hf_data = load_dataset("some/dataset")
+async def main():
+    gen = generator("openai", "YOUR_API_KEY")
+    hf_data = load_dataset("some/dataset")
 
-ds = dataset({
-    "original_prompt": sample.from_dataset(hf_data, "prompt"),
-    "variation": gen("rewrite this prompt: {original_prompt}"),
-    "response": gen("respond to: {variation}")
-})
+    ds = dataset({
+        "original_prompt": sample.from_dataset(hf_data, "prompt"),
+        "variation": gen("rewrite this prompt: {original_prompt}"),
+        "response": gen("respond to: {variation}")
+    })
+
+    df = await ds.generate(n=100)
+    return df
+
+df = asyncio.run(main())
 ```
 
 ## Evaluation
@@ -102,18 +120,25 @@ ds = dataset({
 Evaluate rows inline or compute aggregate metrics:
 
 ```python
+import asyncio
 from chatan import dataset, eval, sample
 
-ds = dataset({
-    "col1": sample.choice(["a", "a", "b"]),
-    "col2": "b",
-    "score": eval.exact_match("col1", "col2")
-})
+async def main():
+    ds = dataset({
+        "col1": sample.choice(["a", "a", "b"]),
+        "col2": "b",
+        "score": eval.exact_match("col1", "col2")
+    })
 
-df = ds.generate()
-aggregate = ds.evaluate({
-    "exact_match": ds.eval.exact_match("col1", "col2")
-})
+    df = await ds.generate(n=100)
+
+    # Aggregate evaluation
+    aggregate = ds.evaluate({
+        "exact_match": ds.eval.exact_match("col1", "col2")
+    })
+    return df, aggregate
+
+df, aggregate = asyncio.run(main())
 ```
 
 ### Advanced Evaluation (requires `pip install chatan[eval]`)
