@@ -1,4 +1,4 @@
-"""LLM generators with CPU fallback, async support, and aggressive memory management."""
+"""LLM generators with async support and memory management."""
 
 import asyncio
 import gc
@@ -12,21 +12,12 @@ try:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    TRANSFORMERS_AVAILALBE = True
+    TRANSFORMERS_AVAILABLE = True
 except ImportError:
-    TRANSFORMERS_AVAILALBE = False
+    TRANSFORMERS_AVAILABLE = False
 
 
 class BaseGenerator(ABC):
-    """Base class for LLM generators."""
-
-    @abstractmethod
-    def generate(self, prompt: str, **kwargs) -> str:
-        """Generate content from a prompt."""
-        pass
-
-
-class AsyncBaseGenerator(ABC):
     """Base class for async LLM generators."""
 
     @abstractmethod
@@ -36,26 +27,6 @@ class AsyncBaseGenerator(ABC):
 
 
 class OpenAIGenerator(BaseGenerator):
-    """OpenAI GPT generator."""
-
-    def __init__(self, api_key: str, model: str = "gpt-3.5-turbo", **kwargs):
-        self.client = openai.OpenAI(api_key=api_key)
-        self.model = model
-        self.default_kwargs = kwargs
-
-    def generate(self, prompt: str, **kwargs) -> str:
-        """Generate content using OpenAI API."""
-        merged_kwargs = {**self.default_kwargs, **kwargs}
-
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            **merged_kwargs,
-        )
-        return response.choices[0].message.content.strip()
-
-
-class AsyncOpenAIGenerator(AsyncBaseGenerator):
     """Async OpenAI GPT generator."""
 
     def __init__(self, api_key: str, model: str = "gpt-3.5-turbo", **kwargs):
@@ -83,27 +54,6 @@ class AsyncOpenAIGenerator(AsyncBaseGenerator):
 
 
 class AnthropicGenerator(BaseGenerator):
-    """Anthropic Claude generator."""
-
-    def __init__(self, api_key: str, model: str = "claude-3-sonnet-20240229", **kwargs):
-        self.client = anthropic.Anthropic(api_key=api_key)
-        self.model = model
-        self.default_kwargs = kwargs
-
-    def generate(self, prompt: str, **kwargs) -> str:
-        """Generate content using Anthropic API."""
-        merged_kwargs = {**self.default_kwargs, **kwargs}
-
-        response = self.client.messages.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=merged_kwargs.pop("max_tokens", 1000),
-            **merged_kwargs,
-        )
-        return response.content[0].text.strip()
-
-
-class AsyncAnthropicGenerator(AsyncBaseGenerator):
     """Async Anthropic Claude generator."""
 
     def __init__(
@@ -136,11 +86,15 @@ class AsyncAnthropicGenerator(AsyncBaseGenerator):
         return response.content[0].text.strip()
 
 
-class TransformersGenerator(BaseGenerator):
-    """Local HuggingFace/transformers generator with aggressive memory management."""
+class TransformersGenerator:
+    """Local HuggingFace/transformers generator with memory management.
+
+    Note: This generator is synchronous as local model inference
+    doesn't benefit from async I/O.
+    """
 
     def __init__(self, model: str, force_cpu: bool = False, **kwargs):
-        if not TRANSFORMERS_AVAILALBE:
+        if not TRANSFORMERS_AVAILABLE:
             raise ImportError(
                 "Transformers and PyTorch are required for local model generation. "
                 "Install with: pip install chatan[local]"
@@ -191,13 +145,16 @@ class TransformersGenerator(BaseGenerator):
             try:
                 torch.mps.empty_cache()
             except Exception as e:
-                print(
-                    f"Failed to clear MPS cache: {e}"
-                )  # Log the error instead of ignoring
+                print(f"Failed to clear MPS cache: {e}")
         gc.collect()
 
-    def generate(self, prompt: str, **kwargs) -> str:
-        """Generate content - optimized for CPU with 16GB RAM."""
+    async def generate(self, prompt: str, **kwargs) -> str:
+        """Generate content - runs sync inference in thread pool."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._generate_sync, prompt, kwargs)
+
+    def _generate_sync(self, prompt: str, kwargs: dict) -> str:
+        """Synchronous generation for local models."""
         try:
             generation_kwargs = {
                 "max_new_tokens": kwargs.get("max_new_tokens", 512),
@@ -249,35 +206,11 @@ class TransformersGenerator(BaseGenerator):
 
 
 class GeneratorFunction:
-    """Callable generator function for use in dataset schemas."""
+    """Callable async generator function with concurrency support."""
 
     def __init__(
         self,
         generator: BaseGenerator,
-        prompt_template: str,
-        variables: Optional[Dict[str, Any]] = None,
-    ):
-        self.generator = generator
-        self.prompt_template = prompt_template
-        self.variables = variables or {}
-
-    def __call__(self, context: Dict[str, Any]) -> str:
-        """Generate content with context substitution."""
-        merged = dict(context)
-        for key, value in self.variables.items():
-            merged[key] = value(context) if callable(value) else value
-
-        prompt = self.prompt_template.format(**merged)
-        result = self.generator.generate(prompt)
-        return result.strip() if isinstance(result, str) else result
-
-
-class AsyncGeneratorFunction:
-    """Callable async generator function with high concurrency support."""
-
-    def __init__(
-        self,
-        generator: AsyncBaseGenerator,
         prompt_template: str,
         variables: Optional[Dict[str, Any]] = None,
     ):
@@ -319,7 +252,7 @@ class AsyncGeneratorFunction:
                 try:
                     result = await self(ctx, **kwargs)
                     return index, result, None
-                except Exception as exc:  # pragma: no cover - exercised via return_exceptions
+                except Exception as exc:
                     return index, None, exc
 
         tasks = [
@@ -404,35 +337,6 @@ class GeneratorClient:
         return GeneratorFunction(self._generator, prompt_template, variables)
 
 
-class AsyncGeneratorClient:
-    """Async interface for creating generators with concurrent execution."""
-
-    def __init__(self, provider: str, api_key: Optional[str] = None, **kwargs):
-        provider_lower = provider.lower()
-        try:
-            if provider_lower == "openai":
-                if api_key is None:
-                    raise ValueError("API key is required for OpenAI")
-                self._generator = AsyncOpenAIGenerator(api_key, **kwargs)
-            elif provider_lower == "anthropic":
-                if api_key is None:
-                    raise ValueError("API key is required for Anthropic")
-                self._generator = AsyncAnthropicGenerator(api_key, **kwargs)
-            else:
-                raise ValueError(f"Unsupported provider for async generator: {provider}")
-
-        except Exception as e:
-            raise ValueError(
-                f"Failed to initialize async generator for provider '{provider}'. "
-                f"Check your configuration and try again. Original error: {str(e)}"
-            ) from e
-
-    def __call__(self, prompt_template: str, **variables) -> AsyncGeneratorFunction:
-        """Create an async generator function."""
-        return AsyncGeneratorFunction(self._generator, prompt_template, variables)
-
-
-# Factory function
 def generator(
     provider: str = "openai", api_key: Optional[str] = None, **kwargs
 ) -> GeneratorClient:
@@ -440,12 +344,3 @@ def generator(
     if provider.lower() in {"openai", "anthropic"} and api_key is None:
         raise ValueError("API key is required")
     return GeneratorClient(provider, api_key, **kwargs)
-
-
-def async_generator(
-    provider: str = "openai", api_key: Optional[str] = None, **kwargs
-) -> AsyncGeneratorClient:
-    """Create an async generator client."""
-    if provider.lower() in {"openai", "anthropic"} and api_key is None:
-        raise ValueError("API key is required")
-    return AsyncGeneratorClient(provider, api_key, **kwargs)

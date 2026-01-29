@@ -506,15 +506,16 @@ class TestTopLevelEvaluate:
         assert results == {"test_metric": 0.75}
 
 
+@pytest.mark.asyncio
 class TestDatasetIntegration:
     """Test integration with Dataset class."""
 
-    def test_dataset_eval_property(self):
+    async def test_dataset_eval_property(self):
         """Test Dataset.eval property."""
         schema = {"col": ChoiceSampler(["A", "B"])}
         ds = dataset(schema, n=5)
-        df = ds.generate()
-        
+        await ds.generate()
+
         # Should be able to access eval property
         evaluator = ds.eval
         assert isinstance(evaluator, DatasetEvaluator)
@@ -523,56 +524,54 @@ class TestDatasetIntegration:
         """Test Dataset.eval property error when no data."""
         schema = {"col": ChoiceSampler(["A"])}
         ds = dataset(schema, n=5)
-        
+
         with pytest.raises(ValueError, match="Dataset must be generated"):
             _ = ds.eval
 
-    def test_dataset_evaluate_method(self):
+    async def test_dataset_evaluate_method(self):
         """Test Dataset.evaluate method."""
         schema = {
             "pred": ChoiceSampler(["hello", "world"]),
             "target": ChoiceSampler(["hello", "world"])
         }
         ds = dataset(schema, n=10)
-        
+        await ds.generate()
+
         # Create mock evaluation functions
         mock_eval1 = Mock()
         mock_eval1.return_value = 0.8
         mock_eval2 = Mock()
         mock_eval2.return_value = 0.9
-        
+
         eval_schema = {
             "similarity": mock_eval1,
             "exact_match": mock_eval2
         }
-        
+
         results = ds.evaluate(eval_schema)
-        
+
         assert results == {"similarity": 0.8, "exact_match": 0.9}
-        # Should have generated data if not already done
         assert ds._data is not None
 
-    def test_dataset_evaluate_auto_generate(self):
-        """Test that Dataset.evaluate auto-generates data if needed."""
+    def test_dataset_evaluate_requires_generation(self):
+        """Test that Dataset.evaluate requires data to be generated first."""
         schema = {"col": ChoiceSampler(["A"])}
         ds = dataset(schema, n=5)
-        
+
         assert ds._data is None
-        
+
         mock_eval = Mock()
         mock_eval.return_value = 1.0
-        
-        ds.evaluate({"test": mock_eval})
-        
-        # Should have generated data
-        assert ds._data is not None
-        assert len(ds._data) == 5
+
+        with pytest.raises(ValueError, match="must be generated"):
+            ds.evaluate({"test": mock_eval})
 
 
+@pytest.mark.asyncio
 class TestIntegrationScenarios:
     """Test realistic integration scenarios."""
 
-    def test_schema_based_evaluation(self):
+    async def test_schema_based_evaluation(self):
         """Test schema-based evaluation (Option A)."""
         with patch('chatan.evaluate.ExactMatchEvaluator.compute', return_value=0.8):
             schema = {
@@ -580,81 +579,81 @@ class TestIntegrationScenarios:
                 "target": ChoiceSampler(["answer1", "answer2"]),
                 "exact_match": eval.exact_match("response", "target")
             }
-            
+
             ds = dataset(schema, n=5)
-            df = ds.generate()
-            
+            df = await ds.generate()
+
             # Should have evaluation column
             assert "exact_match" in df.columns
             # All values should be either 0.0 or 1.0 (exact match results)
             assert all(val in [0.0, 1.0] for val in df["exact_match"])
 
-    def test_aggregate_evaluation(self):
+    async def test_aggregate_evaluation(self):
         """Test aggregate evaluation (Option B)."""
         schema = {
             "response": ChoiceSampler(["hello", "world"]),
             "target": ChoiceSampler(["hello", "world"])
         }
-        
+
         ds = dataset(schema, n=10)
-        df = ds.generate()
-        
+        df = await ds.generate()
+
         # Mock evaluation function
         with patch('chatan.evaluate.ExactMatchEvaluator.compute', return_value=0.7):
             eval_func = ds.eval.exact_match("response", "target")
             result = eval_func(df)
             assert result == 0.7
 
-    def test_cross_dataset_comparison(self):
+    async def test_cross_dataset_comparison(self):
         """Test comparing multiple datasets using Dataset.evaluate."""
         schema1 = {"response": ChoiceSampler(["good", "great"])}
         schema2 = {"response": ChoiceSampler(["bad", "worse"])}
-        
+
         ds1 = dataset(schema1, n=5)
         ds2 = dataset(schema2, n=5)
-        
+
         # Generate both datasets
-        df1 = ds1.generate()
-        df2 = ds2.generate()
-        
+        df1 = await ds1.generate()
+        df2 = await ds2.generate()
+
         # Use Dataset.evaluate for individual dataset evaluation
         with patch('chatan.evaluate.ExactMatchEvaluator.compute', return_value=1.0):
             eval_func = ds1.eval.exact_match("response", "response")
             results1 = ds1.evaluate({"self_match": eval_func})
             assert results1["self_match"] == 1.0
-        
+
         # For cross-dataset comparison, create wrapper functions
         def eval_ds1():
             with patch('chatan.evaluate.ExactMatchEvaluator.compute', return_value=0.9):
                 eval_func = ds1.eval.exact_match("response", "response")
                 return eval_func(df1)
-                
+
         def eval_ds2():
             with patch('chatan.evaluate.ExactMatchEvaluator.compute', return_value=0.3):
-                eval_func = ds2.eval.exact_match("response", "response") 
+                eval_func = ds2.eval.exact_match("response", "response")
                 return eval_func(df2)
-        
+
         eval_schema = {
             "ds1_quality": eval_ds1,
             "ds2_quality": eval_ds2
         }
-        
+
         results = evaluate(eval_schema)
-        
+
         assert results["ds1_quality"] == 0.9
         assert results["ds2_quality"] == 0.3
 
-    def test_error_handling_in_evaluation(self):
+    async def test_error_handling_in_evaluation(self):
         """Test error handling during evaluation."""
         schema = {"col": ChoiceSampler(["test"])}
         ds = dataset(schema, n=5)
-        df = ds.generate()
-        
+        await ds.generate()
+
         # Mock evaluator that raises exception
         mock_eval = Mock()
         mock_eval.side_effect = Exception("Evaluation failed")
-        
+
         eval_schema = {"failing_metric": mock_eval}
-        
+
         with pytest.raises(Exception, match="Evaluation failed"):
             ds.evaluate(eval_schema)

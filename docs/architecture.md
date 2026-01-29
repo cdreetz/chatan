@@ -240,9 +240,8 @@ Chatan is a Python library for creating diverse, synthetic datasets using LLM ge
 ```
 src/chatan/
 ├── __init__.py          # Public API (dataset, generator, sample, eval)
-├── dataset.py           # Sync Dataset class
-├── async_dataset.py     # Async Dataset class
-├── generator.py         # LLM generators (OpenAI, Anthropic, Transformers)
+├── dataset.py           # Async Dataset class with dependency-aware execution
+├── generator.py         # Async LLM generators (OpenAI, Anthropic, Transformers)
 ├── sampler.py           # Data samplers (choice, uuid, datetime, etc.)
 ├── evaluate.py          # Evaluation metrics
 └── viewer.py            # Live HTML viewer
@@ -251,23 +250,27 @@ src/chatan/
 ## Quick Start Example
 
 ```python
+import asyncio
 import chatan
 
-# 1. Create a generator
-gen = chatan.generator("openai", "your-api-key")
+async def main():
+    # 1. Create a generator
+    gen = chatan.generator("openai", "your-api-key")
 
-# 2. Define dataset schema
-ds = chatan.dataset({
-    "language": chatan.sample.choice(["Python", "JavaScript", "Rust"]),
-    "difficulty": chatan.sample.weighted({"easy": 0.5, "medium": 0.3, "hard": 0.2}),
-    "question": gen("Write a {difficulty} coding question about {language}"),
-    "solution": gen("Provide a solution for: {question}")
-})
+    # 2. Define dataset schema
+    ds = chatan.dataset({
+        "language": chatan.sample.choice(["Python", "JavaScript", "Rust"]),
+        "difficulty": chatan.sample.weighted({"easy": 0.5, "medium": 0.3, "hard": 0.2}),
+        "question": gen("Write a {difficulty} coding question about {language}"),
+        "solution": gen("Provide a solution for: {question}")
+    })
 
-# 3. Generate data
-df = ds.generate(n=100)
+    # 3. Generate data (async for concurrent API calls)
+    df = await ds.generate(n=100)
 
-# 4. Export
-df.to_csv("coding_questions.csv")
-ds.save("dataset.parquet", format="parquet")
+    # 4. Export
+    df.to_csv("coding_questions.csv")
+    ds.save("dataset.parquet", format="parquet")
+
+asyncio.run(main())
 ```
