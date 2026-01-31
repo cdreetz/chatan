@@ -60,16 +60,17 @@ class Dataset:
         self,
         n: Optional[int] = None,
         progress: bool = True,
-        max_concurrent_rows: int = 10,
-        max_concurrent_columns: int = 5,
+        concurrency: int = 50,
+        max_concurrent_columns: int = -1,
     ) -> pd.DataFrame:
         """Generate the dataset asynchronously with dependency management.
 
         Args:
             n: Number of samples to generate
             progress: Whether to display a progress bar
-            max_concurrent_rows: Maximum number of rows to process concurrently
-            max_concurrent_columns: Maximum number of columns to generate concurrently per row
+            concurrency: Maximum number of rows to process concurrently
+            max_concurrent_columns: Maximum columns to generate concurrently per row.
+                Use -1 for unlimited (default).
 
         Returns:
             Generated DataFrame
@@ -81,7 +82,7 @@ class Dataset:
         execution_order = self._topological_sort(dependencies)
 
         # Create semaphore for row concurrency
-        row_semaphore = asyncio.Semaphore(max_concurrent_rows)
+        row_semaphore = asyncio.Semaphore(concurrency)
 
         # Generate all rows concurrently with bounded parallelism
         tasks = []
