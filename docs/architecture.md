@@ -56,7 +56,7 @@ Chatan is a Python library for creating diverse, synthetic datasets using LLM ge
 │         (dataset.py)               │  │        (async_dataset.py)          │
 │                                    │  │                                    │
 │  for row in range(n):              │  │  Concurrent execution with:        │
-│    for col in sorted_columns:      │  │  • concurrency (50)                │
+│    for col in sorted_columns:      │  │  • concurrency (100)                │
 │      generate_value(col)           │  │  • max_concurrent_columns (-1)     │
 │                                    │  │  • asyncio.Semaphore              │
 │  Sequential, simple                │  │  • asyncio.Event for deps          │
@@ -193,12 +193,12 @@ Chatan is a Python library for creating diverse, synthetic datasets using LLM ge
 ┌─────────────────────────────────────────────────────────────────┐
 │                  Async Concurrency Model                         │
 │                                                                 │
-│   concurrency = 50                                              │
+│   concurrency = 100                                             │
 │   max_concurrent_columns = -1  (unlimited)                      │
 │                                                                 │
 │   ┌─────────────────────────────────────────────────────────┐   │
 │   │                    Row Semaphore                         │   │
-│   │                   (limits: 50 rows)                      │   │
+│   │                   (limits: 100 rows)                     │   │
 │   └─────────────────────────────────────────────────────────┘   │
 │              │         │         │         │                    │
 │              ▼         ▼         ▼         ▼                    │

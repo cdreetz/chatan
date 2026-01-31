@@ -60,7 +60,7 @@ class Dataset:
         self,
         n: Optional[int] = None,
         progress: bool = True,
-        concurrency: int = 50,
+        concurrency: int = 100,
         max_concurrent_columns: int = -1,
     ) -> pd.DataFrame:
         """Generate the dataset asynchronously with dependency management.
