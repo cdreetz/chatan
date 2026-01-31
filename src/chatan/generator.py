@@ -7,6 +7,7 @@ from typing import Any, Dict, Iterable, Optional
 
 import anthropic
 import openai
+from tenacity import retry, stop_after_attempt, wait_random_exponential
 
 try:
     import torch
@@ -33,7 +34,6 @@ class OpenAIGenerator(BaseGenerator):
         self,
         api_key: str,
         model: str = "gpt-3.5-turbo",
-        max_retries: int = 5,
         **kwargs,
     ):
         async_client_cls = getattr(openai, "AsyncOpenAI", None)
@@ -43,10 +43,11 @@ class OpenAIGenerator(BaseGenerator):
                 "to a version that provides `AsyncOpenAI`."
             )
 
-        self.client = async_client_cls(api_key=api_key, max_retries=max_retries)
+        self.client = async_client_cls(api_key=api_key)
         self.model = model
         self.default_kwargs = kwargs
 
+    @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(6))
     async def generate(self, prompt: str, **kwargs) -> str:
         """Generate content using OpenAI API asynchronously."""
         merged_kwargs = {**self.default_kwargs, **kwargs}
@@ -66,7 +67,6 @@ class AnthropicGenerator(BaseGenerator):
         self,
         api_key: str,
         model: str = "claude-3-sonnet-20240229",
-        max_retries: int = 5,
         **kwargs,
     ):
         async_client_cls = getattr(anthropic, "AsyncAnthropic", None)
@@ -76,10 +76,11 @@ class AnthropicGenerator(BaseGenerator):
                 "to a version that provides `AsyncAnthropic`."
             )
 
-        self.client = async_client_cls(api_key=api_key, max_retries=max_retries)
+        self.client = async_client_cls(api_key=api_key)
         self.model = model
         self.default_kwargs = kwargs
 
+    @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(6))
     async def generate(self, prompt: str, **kwargs) -> str:
         """Generate content using Anthropic API asynchronously."""
         merged_kwargs = {**self.default_kwargs, **kwargs}
