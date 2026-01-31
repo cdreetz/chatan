@@ -39,7 +39,7 @@ dependencies = [
     "ruff>=0.14.0",
 ]
 
-[pyproject.optional-dependencies]
+[project.optional-dependencies]
 # Local model support
 local = [
     "transformers>=4.0.0",

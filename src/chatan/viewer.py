@@ -511,6 +511,71 @@ def create_viewer_callback(viewer: LiveViewer) -> Callable[[Dict[str, Any]], Non
     return callback
 
 
+async def _generate_with_viewer_async(
+    dataset_instance,
+    viewer: LiveViewer,
+    num_samples: int,
+    stream_delay: float,
+    cell_delay: float,
+):
+    """Async implementation of generate_with_viewer."""
+    import asyncio
+    import pandas as pd
+
+    from .generator import GeneratorFunction
+    from .sampler import SampleFunction
+
+    # Build dependency graph
+    dependencies = dataset_instance._build_dependency_graph()
+    execution_order = dataset_instance._topological_sort(dependencies)
+
+    # Generate data with live updates
+    data = []
+
+    for i in range(num_samples):
+        # Start new row
+        viewer.start_row(i)
+
+        row = {}
+        for column in execution_order:
+            # Generate cell value
+            func = dataset_instance.schema[column]
+
+            if isinstance(func, GeneratorFunction):
+                value = await func(row)
+            elif isinstance(func, SampleFunction):
+                value = func(row)
+            elif callable(func):
+                if asyncio.iscoroutinefunction(func):
+                    value = await func(row)
+                else:
+                    value = func(row)
+            else:
+                value = func
+
+            row[column] = value
+
+            # Update viewer with new cell value
+            viewer.update_cell(column, value)
+
+            # Delay to show cell generation effect
+            if cell_delay > 0:
+                await asyncio.sleep(cell_delay)
+
+        # Complete the row
+        data.append(row)
+        viewer.add_row(row)
+
+        # Small delay between rows
+        if stream_delay > 0:
+            await asyncio.sleep(stream_delay)
+
+    viewer.complete()
+
+    dataset_instance._data = pd.DataFrame(data)
+    return dataset_instance._data
+
+
 def generate_with_viewer(
     dataset_instance,
     n: Optional[int] = None,
@@ -534,6 +599,8 @@ def generate_with_viewer(
     Returns:
         pd.DataFrame: Generated dataset
     """
+    import asyncio
+
     viewer = LiveViewer(title=viewer_title, auto_open=auto_open)
     num_samples = n or dataset_instance.n
 
@@ -542,45 +609,17 @@ def generate_with_viewer(
         url = viewer.start(dataset_instance.schema)
         print(f"Live viewer started at: {url}")
 
-        # Build dependency graph (copied from dataset logic)
-        dependencies = dataset_instance._build_dependency_graph()
-        execution_order = dataset_instance._topological_sort(dependencies)
-
-        # Generate data with live updates
-        data = []
-
-        for i in range(num_samples):
-            # Start new row
-            viewer.start_row(i)
-
-            row = {}
-            for column in execution_order:
-                # Generate cell value
-                value = dataset_instance._generate_value(column, row)
-                row[column] = value
-
-                # Update viewer with new cell value
-                viewer.update_cell(column, value)
-
-                # Delay to show cell generation effect
-                if cell_delay > 0:
-                    time.sleep(cell_delay)
-
-            # Complete the row
-            data.append(row)
-            viewer.add_row(row)
-
-            # Small delay between rows
-            if stream_delay > 0:
-                time.sleep(stream_delay)
-
-        viewer.complete()
-
-        # Import pandas dynamically to avoid circular imports
-        import pandas as pd
-
-        dataset_instance._data = pd.DataFrame(data)
-        return dataset_instance._data
+        # Run async generation
+        result = asyncio.run(
+            _generate_with_viewer_async(
+                dataset_instance,
+                viewer,
+                num_samples,
+                stream_delay,
+                cell_delay,
+            )
+        )
+        return result
 
     except Exception as e:
         viewer.stop()
