@@ -33,7 +33,7 @@ class OpenAIGenerator(BaseGenerator):
     def __init__(
         self,
         api_key: str,
-        model: str = "gpt-3.5-turbo",
+        model: str = "gpt-4.1-mini",
         **kwargs,
     ):
         async_client_cls = getattr(openai, "AsyncOpenAI", None)
@@ -66,7 +66,7 @@ class AnthropicGenerator(BaseGenerator):
     def __init__(
         self,
         api_key: str,
-        model: str = "claude-3-sonnet-20240229",
+        model: str = "claude-haiku-4-5",
         **kwargs,
     ):
         async_client_cls = getattr(anthropic, "AsyncAnthropic", None)
