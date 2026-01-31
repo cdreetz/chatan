@@ -2,46 +2,11 @@
 
 import asyncio
 import gc
-import random
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Iterable, Optional
 
 import anthropic
 import openai
-
-
-async def retry_with_backoff(
-    coro_func,
-    max_retries: int = 5,
-    initial_delay: float = 1.0,
-    max_delay: float = 60.0,
-    exponential_base: float = 2.0,
-):
-    """Retry an async function with exponential backoff on rate limit errors.
-
-    Args:
-        coro_func: Async function to call (should return a coroutine when called)
-        max_retries: Maximum number of retry attempts
-        initial_delay: Initial delay in seconds before first retry
-        max_delay: Maximum delay between retries
-        exponential_base: Base for exponential backoff calculation
-    """
-    last_exception = None
-
-    for attempt in range(max_retries + 1):
-        try:
-            return await coro_func()
-        except (openai.RateLimitError, anthropic.RateLimitError) as e:
-            last_exception = e
-            if attempt == max_retries:
-                raise
-
-            # Calculate delay with exponential backoff and jitter
-            delay = min(initial_delay * (exponential_base**attempt), max_delay)
-            jitter = random.uniform(0, delay * 0.1)
-            await asyncio.sleep(delay + jitter)
-
-    raise last_exception
 
 try:
     import torch
@@ -78,24 +43,20 @@ class OpenAIGenerator(BaseGenerator):
                 "to a version that provides `AsyncOpenAI`."
             )
 
-        self.client = async_client_cls(api_key=api_key)
+        self.client = async_client_cls(api_key=api_key, max_retries=max_retries)
         self.model = model
-        self.max_retries = max_retries
         self.default_kwargs = kwargs
 
     async def generate(self, prompt: str, **kwargs) -> str:
-        """Generate content using OpenAI API asynchronously with retry."""
+        """Generate content using OpenAI API asynchronously."""
         merged_kwargs = {**self.default_kwargs, **kwargs}
 
-        async def _make_request():
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                **merged_kwargs,
-            )
-            return response.choices[0].message.content.strip()
-
-        return await retry_with_backoff(_make_request, max_retries=self.max_retries)
+        response = await self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            **merged_kwargs,
+        )
+        return response.choices[0].message.content.strip()
 
 
 class AnthropicGenerator(BaseGenerator):
@@ -115,26 +76,21 @@ class AnthropicGenerator(BaseGenerator):
                 "to a version that provides `AsyncAnthropic`."
             )
 
-        self.client = async_client_cls(api_key=api_key)
+        self.client = async_client_cls(api_key=api_key, max_retries=max_retries)
         self.model = model
-        self.max_retries = max_retries
         self.default_kwargs = kwargs
 
     async def generate(self, prompt: str, **kwargs) -> str:
-        """Generate content using Anthropic API asynchronously with retry."""
+        """Generate content using Anthropic API asynchronously."""
         merged_kwargs = {**self.default_kwargs, **kwargs}
-        max_tokens = merged_kwargs.pop("max_tokens", 1000)
 
-        async def _make_request():
-            response = await self.client.messages.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=max_tokens,
-                **merged_kwargs,
-            )
-            return response.content[0].text.strip()
-
-        return await retry_with_backoff(_make_request, max_retries=self.max_retries)
+        response = await self.client.messages.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=merged_kwargs.pop("max_tokens", 1000),
+            **merged_kwargs,
+        )
+        return response.content[0].text.strip()
 
 
 class TransformersGenerator:
