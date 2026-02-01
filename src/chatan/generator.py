@@ -7,6 +7,7 @@ from typing import Any, Dict, Iterable, Optional
 
 import anthropic
 import openai
+from tenacity import retry, stop_after_attempt, wait_random_exponential
 
 try:
     import torch
@@ -27,9 +28,14 @@ class BaseGenerator(ABC):
 
 
 class OpenAIGenerator(BaseGenerator):
-    """Async OpenAI GPT generator."""
+    """Async OpenAI GPT generator with automatic retry on rate limits."""
 
-    def __init__(self, api_key: str, model: str = "gpt-3.5-turbo", **kwargs):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gpt-4.1-mini",
+        **kwargs,
+    ):
         async_client_cls = getattr(openai, "AsyncOpenAI", None)
         if async_client_cls is None:
             raise ImportError(
@@ -41,6 +47,7 @@ class OpenAIGenerator(BaseGenerator):
         self.model = model
         self.default_kwargs = kwargs
 
+    @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(6))
     async def generate(self, prompt: str, **kwargs) -> str:
         """Generate content using OpenAI API asynchronously."""
         merged_kwargs = {**self.default_kwargs, **kwargs}
@@ -54,12 +61,12 @@ class OpenAIGenerator(BaseGenerator):
 
 
 class AnthropicGenerator(BaseGenerator):
-    """Async Anthropic Claude generator."""
+    """Async Anthropic Claude generator with automatic retry on rate limits."""
 
     def __init__(
         self,
         api_key: str,
-        model: str = "claude-3-sonnet-20240229",
+        model: str = "claude-haiku-4-5",
         **kwargs,
     ):
         async_client_cls = getattr(anthropic, "AsyncAnthropic", None)
@@ -73,6 +80,7 @@ class AnthropicGenerator(BaseGenerator):
         self.model = model
         self.default_kwargs = kwargs
 
+    @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(6))
     async def generate(self, prompt: str, **kwargs) -> str:
         """Generate content using Anthropic API asynchronously."""
         merged_kwargs = {**self.default_kwargs, **kwargs}

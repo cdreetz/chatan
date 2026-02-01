@@ -30,7 +30,7 @@ class TestOpenAIGenerator:
     async def test_init_default_model(self, mock_async_openai):
         """Test OpenAI generator initialization with default model."""
         gen = OpenAIGenerator("test-key")
-        assert gen.model == "gpt-3.5-turbo"
+        assert gen.model == "gpt-4.1-mini"
         mock_async_openai.assert_called_once_with(api_key="test-key")
 
     @patch("openai.AsyncOpenAI")
@@ -59,7 +59,7 @@ class TestOpenAIGenerator:
 
         assert result == "Generated content"
         mock_client.chat.completions.create.assert_called_once_with(
-            model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Test prompt"}]
+            model="gpt-4.1-mini", messages=[{"role": "user", "content": "Test prompt"}]
         )
 
     @patch("openai.AsyncOpenAI")
@@ -80,7 +80,7 @@ class TestOpenAIGenerator:
         result = await gen.generate("Test", max_tokens=100)
 
         mock_client.chat.completions.create.assert_called_once_with(
-            model="gpt-3.5-turbo",
+            model="gpt-4.1-mini",
             messages=[{"role": "user", "content": "Test"}],
             temperature=0.5,
             max_tokens=100,
@@ -115,7 +115,7 @@ class TestAnthropicGenerator:
     async def test_init_default_model(self, mock_async_anthropic):
         """Test Anthropic generator initialization."""
         gen = AnthropicGenerator("test-key")
-        assert gen.model == "claude-3-sonnet-20240229"
+        assert gen.model == "claude-haiku-4-5"
         mock_async_anthropic.assert_called_once_with(api_key="test-key")
 
     @patch("anthropic.AsyncAnthropic")
@@ -137,7 +137,7 @@ class TestAnthropicGenerator:
 
         assert result == "Generated content"
         mock_client.messages.create.assert_called_once_with(
-            model="claude-3-sonnet-20240229",
+            model="claude-haiku-4-5",
             messages=[{"role": "user", "content": "Test prompt"}],
             max_tokens=1000,
         )
@@ -381,7 +381,7 @@ class TestIntegration:
 
         assert result == "The capital of France is Paris."
         mock_client.chat.completions.create.assert_called_once_with(
-            model="gpt-3.5-turbo",
+            model="gpt-4.1-mini",
             messages=[{"role": "user", "content": "What is the capital of France?"}],
         )
 
@@ -449,7 +449,7 @@ class TestIntegration:
 
         assert result == "Question about elephants"
         mock_client.chat.completions.create.assert_called_once_with(
-            model="gpt-3.5-turbo",
+            model="gpt-4.1-mini",
             messages=[{"role": "user", "content": "Question about elephants"}],
         )
 
@@ -476,6 +476,8 @@ class TestErrorHandling:
     @patch("openai.AsyncOpenAI")
     async def test_openai_api_error(self, mock_async_openai):
         """Test handling of OpenAI API errors."""
+        from tenacity import RetryError
+
         mock_client = MagicMock()
 
         async def raise_error(*args, **kwargs):
@@ -485,12 +487,14 @@ class TestErrorHandling:
         mock_async_openai.return_value = mock_client
 
         gen = OpenAIGenerator("test-key")
-        with pytest.raises(Exception, match="API Error"):
+        with pytest.raises(RetryError):
             await gen.generate("Test prompt")
 
     @patch("anthropic.AsyncAnthropic")
     async def test_anthropic_api_error(self, mock_async_anthropic):
         """Test handling of Anthropic API errors."""
+        from tenacity import RetryError
+
         mock_client = MagicMock()
 
         async def raise_error(*args, **kwargs):
@@ -500,7 +504,7 @@ class TestErrorHandling:
         mock_async_anthropic.return_value = mock_client
 
         gen = AnthropicGenerator("test-key")
-        with pytest.raises(Exception, match="API Error"):
+        with pytest.raises(RetryError):
             await gen.generate("Test prompt")
 
     async def test_empty_response_handling(self):
