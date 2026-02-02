@@ -165,11 +165,18 @@ class Dataset:
             # Samplers are sync but fast
             value = func(row)
         elif callable(func):
-            # Check if it's an async callable
+            # Check if it's an async callable (function or __call__ method)
             if asyncio.iscoroutinefunction(func):
                 value = await func(row)
+            elif hasattr(func, '__call__') and asyncio.iscoroutinefunction(func.__call__):
+                value = await func(row)
             else:
-                value = func(row)
+                result = func(row)
+                # Handle case where callable returns a coroutine
+                if asyncio.iscoroutine(result):
+                    value = await result
+                else:
+                    value = result
         else:
             # Static value
             value = func
