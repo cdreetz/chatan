@@ -111,6 +111,62 @@ class DatasetSampler(SampleFunction):
         return random.choice(self.values)
 
 
+class RowSampler:
+    """Sample aligned rows from a dataset - all columns from the same row."""
+
+    def __init__(self, dataset: Union[pd.DataFrame, HFDataset, Dict]):
+        if isinstance(dataset, pd.DataFrame):
+            self._data = dataset
+            self._len = len(dataset)
+        elif isinstance(dataset, HFDataset):
+            self._data = dataset
+            self._len = len(dataset)
+        elif isinstance(dataset, dict):
+            self._data = dataset
+            first_key = next(iter(dataset.keys()))
+            self._len = len(dataset[first_key])
+        else:
+            raise ValueError("Unsupported dataset type")
+
+        self._index_cache: Dict[int, int] = {}
+
+    def _get_index(self, context: Dict[str, Any]) -> int:
+        """Get or create the sampled row index for this context."""
+        ctx_id = id(context) if context else 0
+        if ctx_id not in self._index_cache:
+            self._index_cache[ctx_id] = random.randint(0, self._len - 1)
+        return self._index_cache[ctx_id]
+
+    def __getitem__(self, column: str) -> "RowColumnSampler":
+        """Get a sampler for a specific column."""
+        return RowColumnSampler(self, column)
+
+    def clear_cache(self) -> None:
+        """Clear the index cache."""
+        self._index_cache.clear()
+
+
+class RowColumnSampler(SampleFunction):
+    """Sample a column value from an aligned row."""
+
+    def __init__(self, row_sampler: RowSampler, column: str):
+        self._row_sampler = row_sampler
+        self._column = column
+
+    def __call__(self, context: Dict[str, Any] = None) -> Any:
+        idx = self._row_sampler._get_index(context)
+        data = self._row_sampler._data
+
+        if isinstance(data, pd.DataFrame):
+            return data.iloc[idx][self._column]
+        elif isinstance(data, HFDataset):
+            return data[idx][self._column]
+        elif isinstance(data, dict):
+            return data[self._column][idx]
+        else:
+            raise ValueError("Unsupported dataset type")
+
+
 # Factory functions for the sample namespace
 class SampleNamespace:
     """Namespace for sampling functions."""
@@ -150,8 +206,26 @@ class SampleNamespace:
         column: str,
         default: Optional[SampleFunction] = None,
     ) -> DatasetSampler:
-        """Sample from existing dataset."""
+        """Sample from existing dataset (independent per column)."""
         return DatasetSampler(dataset, column, default)
+
+    @staticmethod
+    def row(dataset: Union[pd.DataFrame, HFDataset, Dict]) -> RowSampler:
+        """Sample aligned rows from a dataset.
+
+        Returns a RowSampler that ensures all column accesses within
+        the same row come from the same source row.
+
+        Example:
+            >>> eval_data = load_dataset("squad")
+            >>> row = sample.row(eval_data)
+            >>> ds = dataset({
+            ...     "question": row["question"],
+            ...     "context": row["context"],
+            ...     "answer": row["answer"],
+            ... })
+        """
+        return RowSampler(dataset)
 
 
 # Export the sample namespace

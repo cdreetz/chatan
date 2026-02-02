@@ -233,7 +233,8 @@ class GeneratorFunction:
             merged[key] = value(context) if callable(value) else value
 
         prompt = self.prompt_template.format(**merged)
-        result = await self.generator.generate(prompt, **kwargs)
+        # Pass context for caching (e.g., verifiers integration)
+        result = await self.generator.generate(prompt, _context=context, **kwargs)
         return result.strip() if isinstance(result, str) else result
 
     async def stream(
