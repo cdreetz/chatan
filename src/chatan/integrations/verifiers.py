@@ -57,7 +57,7 @@ class RolloutGenerator(BaseGenerator):
             input_data,
             self.client,
             self.model,
-            sampling_args=self.sampling_args,
+            gen_sampling_args=self.sampling_args,
         )
 
     def _extract_field(self, result: Dict[str, Any]) -> Any:
