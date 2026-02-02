@@ -1,5 +1,6 @@
 """Verifiers integration for using rollout environments as chatan generators."""
 
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Literal
 
@@ -15,57 +16,64 @@ async def _null_semaphore():
     """A no-op async context manager that acts as an unlimited semaphore."""
     yield
 
+
 ExtractType = Literal["completion", "reward", "metrics", "trajectory", "full"]
 
 
-class RolloutGenerator(BaseGenerator):
-    """Wraps a verifiers environment as a chatan generator."""
+class RolloutResult:
+    """Lazy rollout result - runs once, extracts many."""
 
     def __init__(
         self,
         env: Environment,
         client: AsyncOpenAI,
         model: str,
-        extract: ExtractType = "completion",
-        max_retries: int = 3,
-        cache: Dict[tuple, Dict[str, Any]] | None = None,
+        prompt_template: str,
+        answer_template: str | None = None,
         **sampling_args,
     ):
         self.env = env
         self.client = client
         self.model = model
-        self.extract = extract
-        self.max_retries = max_retries
+        self.prompt_template = prompt_template
+        self.answer_template = answer_template
         self.sampling_args = sampling_args
+        self._cache: Dict[int, Dict[str, Any]] = {}
+        self._locks: Dict[int, asyncio.Lock] = {}
         self._row_counter = 0
-        self._cache = cache if cache is not None else {}
 
-    async def generate(self, prompt: str, **kwargs) -> Any:
-        """Run a verifiers rollout and extract the requested field."""
-        context = kwargs.get("_context")
-        answer = kwargs.get("answer")
+    async def _get_result(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Get or compute the rollout result for this context."""
+        ctx_id = id(context)
 
-        # Cache key includes context, prompt, and answer so different params don't collide
-        cache_key = (id(context) if context else None, prompt, answer)
+        if ctx_id in self._cache:
+            return self._cache[ctx_id]
 
-        if cache_key in self._cache:
-            result = self._cache[cache_key]
-        else:
+        # Get or create lock for this context
+        if ctx_id not in self._locks:
+            self._locks[ctx_id] = asyncio.Lock()
+
+        async with self._locks[ctx_id]:
+            # Double-check after acquiring lock
+            if ctx_id in self._cache:
+                return self._cache[ctx_id]
+
+            prompt = self.prompt_template.format(**context)
+            answer = self.answer_template.format(**context) if self.answer_template else None
+
             input_data = {
                 "prompt": [{"role": "user", "content": prompt}],
                 "example_id": self._row_counter,
                 "task": self.env.env_id or "default",
             }
-
             if answer is not None:
                 input_data["answer"] = answer
 
             self._row_counter += 1
 
             result = await self._run_with_retry(input_data)
-            self._cache[cache_key] = result
-
-        return self._extract_field(result)
+            self._cache[ctx_id] = result
+            return result
 
     @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(3))
     async def _run_with_retry(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -78,19 +86,63 @@ class RolloutGenerator(BaseGenerator):
             gen_sem=_null_semaphore(),
         )
 
+    def _extractor(self, extract: ExtractType) -> "RolloutExtractor":
+        """Create an extractor for a specific field."""
+        return RolloutExtractor(self, extract)
+
+    @property
+    def completion(self) -> "RolloutExtractor":
+        return self._extractor("completion")
+
+    @property
+    def reward(self) -> "RolloutExtractor":
+        return self._extractor("reward")
+
+    @property
+    def metrics(self) -> "RolloutExtractor":
+        return self._extractor("metrics")
+
+    @property
+    def trajectory(self) -> "RolloutExtractor":
+        return self._extractor("trajectory")
+
+    @property
+    def full(self) -> "RolloutExtractor":
+        return self._extractor("full")
+
+
+class RolloutExtractor(BaseGenerator):
+    """Extracts a field from a shared RolloutResult."""
+
+    def __init__(self, rollout_result: RolloutResult, extract: ExtractType):
+        self._rollout_result = rollout_result
+        self._extract = extract
+
+    # Make it usable directly in dataset schema
+    prompt_template = ""
+
+    async def __call__(self, context: Dict[str, Any]) -> Any:
+        """Called by dataset generation."""
+        return await self.generate("", _context=context)
+
+    async def generate(self, prompt: str, **kwargs) -> Any:
+        context = kwargs.get("_context", {})
+        result = await self._rollout_result._get_result(context)
+        return self._extract_field(result)
+
     def _extract_field(self, result: Dict[str, Any]) -> Any:
-        if self.extract == "completion":
+        if self._extract == "completion":
             return self._extract_completion_text(result)
-        elif self.extract == "reward":
+        elif self._extract == "reward":
             return result.get("reward", 0.0)
-        elif self.extract == "metrics":
+        elif self._extract == "metrics":
             return result.get("metrics", {})
-        elif self.extract == "trajectory":
+        elif self._extract == "trajectory":
             return result.get("trajectory", [])
-        elif self.extract == "full":
+        elif self._extract == "full":
             return dict(result)
         else:
-            return result.get(self.extract)
+            return result.get(self._extract)
 
     def _extract_completion_text(self, result: Dict[str, Any]) -> str:
         completion = result.get("completion", [])
@@ -103,86 +155,22 @@ class RolloutGenerator(BaseGenerator):
         return str(completion)
 
 
-class RolloutGeneratorClient:
-    """Factory for creating rollout generator functions.
-
-    All generators created from the same client share a cache, so multiple
-    extracts from the same rollout only make one API call per row.
-    """
-
-    def __init__(
-        self,
-        env: Environment,
-        client: AsyncOpenAI,
-        model: str,
-        max_retries: int = 3,
-        **default_sampling_args,
-    ):
-        self.env = env
-        self.client = client
-        self.model = model
-        self.max_retries = max_retries
-        self.default_sampling_args = default_sampling_args
-        self._shared_cache: Dict[tuple, Dict[str, Any]] = {}
-
-    def __call__(
-        self,
-        prompt_template: str,
-        extract: ExtractType = "completion",
-        answer: str | None = None,
-        **variables,
-    ) -> GeneratorFunction:
-        """Create a generator function that runs a rollout.
-
-        Args:
-            prompt_template: Template string for the prompt. Can reference other columns.
-            extract: What to extract from the rollout result.
-                - "completion": Last assistant message text (default)
-                - "reward": Reward score
-                - "metrics": Metrics dict
-                - "trajectory": Full trajectory list
-                - "full": Entire rollout output dict
-            answer: Template string for the ground truth answer. Can reference other columns.
-                e.g., answer="{ground_truth}" will resolve the ground_truth column value.
-            **variables: Additional variables to pass to the template.
-
-        Returns:
-            GeneratorFunction that can be used in a chatan dataset schema.
-        """
-        generator = RolloutGenerator(
-            env=self.env,
-            client=self.client,
-            model=self.model,
-            extract=extract,
-            max_retries=self.max_retries,
-            cache=self._shared_cache,
-            **self.default_sampling_args,
-        )
-
-        if answer is not None:
-            variables["answer"] = lambda ctx: answer.format(**ctx)
-
-        return GeneratorFunction(generator, prompt_template, variables)
-
-
 def rollout_generator(
     env: Environment,
     client: AsyncOpenAI,
     model: str,
-    max_retries: int = 3,
     **sampling_args,
-) -> RolloutGeneratorClient:
-    """Create a rollout generator client.
+) -> "RolloutClient":
+    """Create a rollout client.
 
     Args:
         env: Verifiers environment to use for rollouts.
         client: AsyncOpenAI client.
         model: Model name to use for generation.
-        max_retries: Number of retries on transient failures. Default 3.
         **sampling_args: Additional sampling arguments passed to the model.
 
     Returns:
-        RolloutGeneratorClient that can be called to create generator functions.
+        RolloutClient that can be called to create rollout results.
 
     Example:
         >>> from chatan import dataset, sample
@@ -194,17 +182,54 @@ def rollout_generator(
         >>> env = load_environment("gsm8k")
         >>> rollout = rollout_generator(env, client, "gpt-4.1-mini")
         >>>
+        >>> row = sample.row(env.get_eval_dataset())
+        >>> r = rollout("{question}", answer="{ground_truth}")
+        >>>
         >>> ds = dataset({
-        ...     "question": sample.from_dataset(questions, "question"),
-        ...     "ground_truth": sample.from_dataset(questions, "answer"),
-        ...     "model_answer": rollout("{question}", answer="{ground_truth}"),
-        ...     "trajectory": rollout("{question}", extract="trajectory"),
+        ...     "question": row["prompt"],
+        ...     "ground_truth": row["answer"],
+        ...     "model_answer": r.completion,
+        ...     "trajectory": r.trajectory,
+        ...     "reward": r.reward,
         ... })
     """
-    return RolloutGeneratorClient(
-        env=env,
-        client=client,
-        model=model,
-        max_retries=max_retries,
+    return RolloutClient(env, client, model, **sampling_args)
+
+
+class RolloutClient:
+    """Factory for creating rollout results."""
+
+    def __init__(
+        self,
+        env: Environment,
+        client: AsyncOpenAI,
+        model: str,
         **sampling_args,
-    )
+    ):
+        self.env = env
+        self.client = client
+        self.model = model
+        self.sampling_args = sampling_args
+
+    def __call__(
+        self,
+        prompt_template: str,
+        answer: str | None = None,
+    ) -> RolloutResult:
+        """Create a rollout result that can be used to extract multiple fields.
+
+        Args:
+            prompt_template: Template string for the prompt.
+            answer: Template string for the ground truth answer.
+
+        Returns:
+            RolloutResult with .completion, .trajectory, .reward, .metrics, .full extractors.
+        """
+        return RolloutResult(
+            env=self.env,
+            client=self.client,
+            model=self.model,
+            prompt_template=prompt_template,
+            answer_template=answer,
+            **self.sampling_args,
+        )
