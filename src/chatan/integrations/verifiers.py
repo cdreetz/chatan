@@ -1,5 +1,6 @@
 """Verifiers integration for using rollout environments as chatan generators."""
 
+from contextlib import asynccontextmanager
 from typing import Any, Dict, Literal
 
 from openai import AsyncOpenAI
@@ -7,6 +8,12 @@ from tenacity import retry, stop_after_attempt, wait_random_exponential
 from verifiers.envs.environment import Environment
 
 from chatan.generator import BaseGenerator, GeneratorFunction
+
+
+@asynccontextmanager
+async def _null_semaphore():
+    """A no-op async context manager that acts as an unlimited semaphore."""
+    yield
 
 ExtractType = Literal["completion", "reward", "metrics", "trajectory", "full"]
 
@@ -58,6 +65,7 @@ class RolloutGenerator(BaseGenerator):
             self.client,
             self.model,
             gen_sampling_args=self.sampling_args,
+            gen_sem=_null_semaphore(),
         )
 
     def _extract_field(self, result: Dict[str, Any]) -> Any:
