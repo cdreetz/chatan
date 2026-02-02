@@ -28,9 +28,9 @@ class RolloutGenerator(BaseGenerator):
         model: str,
         extract: ExtractType = "completion",
         max_retries: int = 3,
+        cache: Dict[int, Dict[str, Any]] | None = None,
         **sampling_args,
     ):
-
         self.env = env
         self.client = client
         self.model = model
@@ -38,22 +38,34 @@ class RolloutGenerator(BaseGenerator):
         self.max_retries = max_retries
         self.sampling_args = sampling_args
         self._row_counter = 0
+        self._cache = cache if cache is not None else {}
 
     async def generate(self, prompt: str, **kwargs) -> Any:
         """Run a verifiers rollout and extract the requested field."""
+        # Get context id for caching - same row should reuse same rollout
+        context = kwargs.get("_context")
+        ctx_id = id(context) if context else None
 
-        input_data = {
-            "prompt": [{"role": "user", "content": prompt}],
-            "example_id": self._row_counter,
-            "task": self.env.env_id or "default",
-        }
+        # Check cache first
+        if ctx_id is not None and ctx_id in self._cache:
+            result = self._cache[ctx_id]
+        else:
+            input_data = {
+                "prompt": [{"role": "user", "content": prompt}],
+                "example_id": self._row_counter,
+                "task": self.env.env_id or "default",
+            }
 
-        if "answer" in kwargs and kwargs["answer"] is not None:
-            input_data["answer"] = kwargs["answer"]
+            if "answer" in kwargs and kwargs["answer"] is not None:
+                input_data["answer"] = kwargs["answer"]
 
-        self._row_counter += 1
+            self._row_counter += 1
 
-        result = await self._run_with_retry(input_data)
+            result = await self._run_with_retry(input_data)
+
+            # Cache the result
+            if ctx_id is not None:
+                self._cache[ctx_id] = result
 
         return self._extract_field(result)
 
@@ -94,7 +106,11 @@ class RolloutGenerator(BaseGenerator):
 
 
 class RolloutGeneratorClient:
-    """Factory for creating rollout generator functions."""
+    """Factory for creating rollout generator functions.
+
+    All generators created from the same client share a cache, so multiple
+    extracts from the same rollout only make one API call per row.
+    """
 
     def __init__(
         self,
@@ -109,6 +125,7 @@ class RolloutGeneratorClient:
         self.model = model
         self.max_retries = max_retries
         self.default_sampling_args = default_sampling_args
+        self._shared_cache: Dict[int, Dict[str, Any]] = {}
 
     def __call__(
         self,
@@ -140,6 +157,7 @@ class RolloutGeneratorClient:
             model=self.model,
             extract=extract,
             max_retries=self.max_retries,
+            cache=self._shared_cache,
             **self.default_sampling_args,
         )
 
