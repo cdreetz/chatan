@@ -1,5 +1,7 @@
-"""Integrations with external libraries."""
+"""Integrations with external libraries.
 
-from .verifiers import rollout_generator
+Available integrations:
+- verifiers: Use `from chatan.integrations.verifiers import rollout_generator`
+"""
 
-__all__ = ["rollout_generator"]
+__all__: list[str] = []

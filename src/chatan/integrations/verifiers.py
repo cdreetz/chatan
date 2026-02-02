@@ -2,19 +2,11 @@
 
 from typing import Any, Dict, Literal
 
+from openai import AsyncOpenAI
 from tenacity import retry, stop_after_attempt, wait_random_exponential
+from verifiers.envs.environment import Environment
 
 from chatan.generator import BaseGenerator, GeneratorFunction
-
-try:
-    from openai import AsyncOpenAI
-    from verifiers.envs.environment import Environment
-    from verifiers.types import RolloutOutput
-
-    VERIFIERS_AVAILABLE = True
-except ImportError:
-    VERIFIERS_AVAILABLE = False
-
 
 ExtractType = Literal["completion", "reward", "metrics", "trajectory", "full"]
 
@@ -24,18 +16,13 @@ class RolloutGenerator(BaseGenerator):
 
     def __init__(
         self,
-        env: "Environment",
-        client: "AsyncOpenAI",
+        env: Environment,
+        client: AsyncOpenAI,
         model: str,
         extract: ExtractType = "completion",
         max_retries: int = 3,
         **sampling_args,
     ):
-        if not VERIFIERS_AVAILABLE:
-            raise ImportError(
-                "Verifiers integration requires verifiers to be installed. "
-                "Install with: pip install verifiers"
-            )
 
         self.env = env
         self.client = client
@@ -64,7 +51,7 @@ class RolloutGenerator(BaseGenerator):
         return self._extract_field(result)
 
     @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(3))
-    async def _run_with_retry(self, input_data: Dict[str, Any]) -> "RolloutOutput":
+    async def _run_with_retry(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Run rollout with retry on transient failures."""
         return await self.env.run_rollout(
             input_data,
@@ -73,7 +60,7 @@ class RolloutGenerator(BaseGenerator):
             sampling_args=self.sampling_args,
         )
 
-    def _extract_field(self, result: "RolloutOutput") -> Any:
+    def _extract_field(self, result: Dict[str, Any]) -> Any:
         if self.extract == "completion":
             return self._extract_completion_text(result)
         elif self.extract == "reward":
@@ -87,7 +74,7 @@ class RolloutGenerator(BaseGenerator):
         else:
             return result.get(self.extract)
 
-    def _extract_completion_text(self, result: "RolloutOutput") -> str:
+    def _extract_completion_text(self, result: Dict[str, Any]) -> str:
         completion = result.get("completion", [])
         if isinstance(completion, list):
             for msg in reversed(completion):
@@ -103,18 +90,12 @@ class RolloutGeneratorClient:
 
     def __init__(
         self,
-        env: "Environment",
-        client: "AsyncOpenAI",
+        env: Environment,
+        client: AsyncOpenAI,
         model: str,
         max_retries: int = 3,
         **default_sampling_args,
     ):
-        if not VERIFIERS_AVAILABLE:
-            raise ImportError(
-                "Verifiers integration requires verifiers to be installed. "
-                "Install with: pip install verifiers"
-            )
-
         self.env = env
         self.client = client
         self.model = model
@@ -161,8 +142,8 @@ class RolloutGeneratorClient:
 
 
 def rollout_generator(
-    env: "Environment",
-    client: "AsyncOpenAI",
+    env: Environment,
+    client: AsyncOpenAI,
     model: str,
     max_retries: int = 3,
     **sampling_args,
