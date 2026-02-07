@@ -2,13 +2,14 @@
 
 __version__ = "0.3.0"
 
-from .dataset import dataset
+from .dataset import column, dataset
 from .evaluate import eval, evaluate
 from .generator import generator
 from .sampler import sample
 from .viewer import generate_with_viewer
 
 __all__ = [
+    "column",
     "dataset",
     "generator",
     "sample",

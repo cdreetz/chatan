@@ -12,6 +12,52 @@ from .generator import GeneratorFunction
 from .sampler import SampleFunction
 
 
+class CallableColumn:
+    """Wraps a callable with explicit dependency declarations.
+
+    Use this to declare which other columns a callable column depends on,
+    enabling proper execution ordering when callable columns depend on
+    other callable columns.
+
+    Example:
+        >>> schema = {
+        ...     "filepath": get_filepaths,
+        ...     "content": CallableColumn(get_content, depends_on=["filepath"]),
+        ... }
+    """
+
+    def __init__(self, func, depends_on: Optional[List[str]] = None):
+        self.func = func
+        self._depends_on = depends_on or []
+
+    def __call__(self, context: Dict[str, Any]) -> Any:
+        if asyncio.iscoroutinefunction(self.func):
+            raise RuntimeError(
+                "Async CallableColumn must be awaited. This is handled internally."
+            )
+        return self.func(context)
+
+
+def column(func, depends_on: Optional[List[str]] = None) -> CallableColumn:
+    """Declare dependencies for a callable column.
+
+    Args:
+        func: A callable (sync or async) that takes a row context dict.
+        depends_on: List of column names this callable depends on.
+
+    Returns:
+        A CallableColumn wrapping the function with dependency metadata.
+
+    Example:
+        >>> schema = {
+        ...     "filepath": get_filepaths,
+        ...     "content": column(get_content, depends_on=["filepath"]),
+        ...     "summary": column(summarize, depends_on=["content"]),
+        ... }
+    """
+    return CallableColumn(func, depends_on=depends_on)
+
+
 class Dataset:
     """Async dataset generator with dependency-aware execution."""
 
@@ -158,7 +204,14 @@ class Dataset:
         # Generate the value
         func = self.schema[column]
 
-        if isinstance(func, GeneratorFunction):
+        if isinstance(func, CallableColumn):
+            # Unwrap CallableColumn to get the inner function
+            inner = func.func
+            if asyncio.iscoroutinefunction(inner):
+                value = await inner(row)
+            else:
+                value = inner(row)
+        elif isinstance(func, GeneratorFunction):
             # Use async generator
             value = await func(row)
         elif isinstance(func, SampleFunction):
@@ -189,8 +242,11 @@ class Dataset:
         for column, func in self.schema.items():
             deps = []
 
-            # Extract dependencies from generator functions
-            if hasattr(func, "prompt_template"):
+            if isinstance(func, CallableColumn):
+                # Explicit dependencies from CallableColumn wrapper
+                deps = list(func._depends_on)
+            elif hasattr(func, "prompt_template"):
+                # Extract dependencies from generator functions
                 import re
 
                 template = getattr(func, "prompt_template", "")
