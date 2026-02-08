@@ -7,7 +7,7 @@ import os
 from unittest.mock import Mock
 from datasets import Dataset as HFDataset
 
-from chatan.dataset import Dataset, dataset
+from chatan.dataset import Dataset, call, dataset, depends_on
 from chatan.generator import GeneratorFunction, BaseGenerator
 from chatan.sampler import ChoiceSampler, UUIDSampler
 
@@ -132,6 +132,41 @@ class TestDependencyResolution:
         # external_col should be filtered out
         assert dependencies["col2"] == ["col1"]
 
+    def test_explicit_callable_dependencies(self):
+        """Test explicit dependencies for callables."""
+        schema = {
+            "col1": ChoiceSampler(["A"]),
+            "col2": call(lambda ctx: f"v:{ctx['col1']}", requires=["col1"]),
+            "col3": (lambda ctx: f"w:{ctx['col2']}", ["col2"]),
+        }
+        ds = Dataset(schema, n=2)
+
+        dependencies = ds._build_dependency_graph()
+        assert dependencies["col1"] == []
+        assert dependencies["col2"] == ["col1"]
+        assert dependencies["col3"] == ["col2"]
+
+    def test_signature_inferred_callable_dependencies(self):
+        """Test dependencies inferred from callable argument names."""
+
+        def col2(col1):
+            return f"v:{col1}"
+
+        def col3(col2):
+            return f"w:{col2}"
+
+        schema = {
+            "col1": ChoiceSampler(["A"]),
+            "col2": call(col2),
+            "col3": call(col3),
+        }
+        ds = Dataset(schema, n=2)
+
+        dependencies = ds._build_dependency_graph()
+        assert dependencies["col1"] == []
+        assert dependencies["col2"] == ["col1"]
+        assert dependencies["col3"] == ["col2"]
+
 
 @pytest.mark.asyncio
 class TestDataGeneration:
@@ -208,6 +243,100 @@ class TestDataGeneration:
             assert row["b"] == row["a"] * 10
             assert row["d"] == row["b"] + row["c"]
             assert row["e"] == row["a"] + row["d"]
+
+    async def test_callable_call_wrapper(self):
+        """Test callable dependencies via call wrapper."""
+        schema = {
+            "file_path": call(lambda: "src/main.ts"),
+            "file_content": call(
+                lambda ctx: f"content:{ctx['file_path']}",
+                requires=["file_path"],
+            ),
+        }
+        ds = Dataset(schema, n=5)
+        df = await ds.generate()
+
+        assert len(df) == 5
+        assert all(df["file_content"] == "content:src/main.ts")
+
+    async def test_callable_call_wrapper_with_with_keyword_alias(self):
+        """Test call wrapper supports 'with' keyword alias via kwargs expansion."""
+        schema = {
+            "file_path": call(lambda: "src/alias.ts"),
+            "file_content": call(
+                lambda ctx: f"content:{ctx['file_path']}",
+                **{"with": ["file_path"]},
+            ),
+        }
+        ds = Dataset(schema, n=3)
+        df = await ds.generate()
+
+        assert len(df) == 3
+        assert all(df["file_content"] == "content:src/alias.ts")
+
+    async def test_callable_call_wrapper_supports_requires_string(self):
+        """Test call wrapper supports requires as a single string."""
+        schema = {
+            "file_path": call(lambda: "src/single.ts"),
+            "file_content": call(
+                lambda ctx: f"content:{ctx['file_path']}",
+                requires="file_path",
+            ),
+        }
+        ds = Dataset(schema, n=2)
+        df = await ds.generate()
+
+        assert len(df) == 2
+        assert all(df["file_content"] == "content:src/single.ts")
+
+    async def test_depends_on_backwards_compatible(self):
+        """Test depends_on still works as alias."""
+        schema = {
+            "file_path": lambda ctx: "src/legacy.ts",
+            "file_content": depends_on(
+                lambda ctx: f"content:{ctx['file_path']}",
+                "file_path",
+            ),
+        }
+        ds = Dataset(schema, n=3)
+        df = await ds.generate()
+
+        assert len(df) == 3
+        assert all(df["file_content"] == "content:src/legacy.ts")
+
+    async def test_callable_call_wrapper_infers_dependencies_from_signature(self):
+        """Test call wrapper infers dependencies from function signature names."""
+
+        def file_path():
+            return "src/inferred.ts"
+
+        def file_content(file_path):
+            return f"content:{file_path}"
+
+        schema = {
+            "file_path": call(file_path),
+            "file_content": call(file_content),
+        }
+        ds = Dataset(schema, n=3)
+        df = await ds.generate()
+
+        assert len(df) == 3
+        assert all(df["file_content"] == "content:src/inferred.ts")
+
+    async def test_callable_tuple_dependency_spec(self):
+        """Test callable dependencies via tuple spec."""
+        schema = {
+            "file_path": lambda ctx: "src/app.ts",
+            "file_content": (
+                lambda ctx: f"content:{ctx['file_path']}",
+                ["file_path"],
+            ),
+        }
+        ds = Dataset(schema, n=5)
+        df = await ds.generate()
+
+        assert len(df) == 5
+        assert all(df["file_content"] == "content:src/app.ts")
 
     async def test_override_sample_count(self):
         """Test overriding sample count in generate()."""
