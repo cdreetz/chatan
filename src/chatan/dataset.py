@@ -1,7 +1,9 @@
 """Dataset creation and manipulation with async generation."""
 
 import asyncio
-from typing import Any, Dict, List, Optional, Union
+import inspect
+import re
+from typing import Any, Dict, List, Optional, Set, Union
 
 import pandas as pd
 from datasets import Dataset as HFDataset
@@ -12,23 +14,39 @@ from .generator import GeneratorFunction
 from .sampler import SampleFunction
 
 
+def _detect_callable_deps(func, schema_columns: Set[str]) -> List[str]:
+    """Auto-detect dependencies by inspecting a callable's source code.
+
+    Looks for dict subscript patterns like ctx["col"] or ctx['col'] in the
+    function source and returns any that match column names in the schema.
+    """
+    try:
+        source = inspect.getsource(func)
+    except (OSError, TypeError):
+        return []
+
+    # Match any_var["key"] or any_var['key'] patterns
+    accessed_keys = re.findall(r"""\w+\[['"](\w+)['"]\]""", source)
+    return list(dict.fromkeys(k for k in accessed_keys if k in schema_columns))
+
+
 class CallableColumn:
     """Wraps a callable with explicit dependency declarations.
 
-    Use this to declare which other columns a callable column depends on,
-    enabling proper execution ordering when callable columns depend on
-    other callable columns.
+    Only needed when auto-detection doesn't work for your use case
+    (e.g., dynamic key access). In most cases, just pass a plain
+    callable and dependencies are detected automatically.
 
     Example:
         >>> schema = {
         ...     "filepath": get_filepaths,
-        ...     "content": CallableColumn(get_content, depends_on=["filepath"]),
+        ...     "content": get_content,  # auto-detects dep on filepath
         ... }
     """
 
     def __init__(self, func, depends_on: Optional[List[str]] = None):
         self.func = func
-        self._depends_on = depends_on or []
+        self._depends_on = depends_on
 
     def __call__(self, context: Dict[str, Any]) -> Any:
         if asyncio.iscoroutinefunction(self.func):
@@ -39,7 +57,11 @@ class CallableColumn:
 
 
 def column(func, depends_on: Optional[List[str]] = None) -> CallableColumn:
-    """Declare dependencies for a callable column.
+    """Explicitly declare dependencies for a callable column.
+
+    In most cases you don't need this — dependencies are auto-detected
+    from source code. Use this only when auto-detection fails (e.g.,
+    dynamic key access, C extensions).
 
     Args:
         func: A callable (sync or async) that takes a row context dict.
@@ -49,10 +71,14 @@ def column(func, depends_on: Optional[List[str]] = None) -> CallableColumn:
         A CallableColumn wrapping the function with dependency metadata.
 
     Example:
+        >>> # Usually just pass the function directly:
         >>> schema = {
         ...     "filepath": get_filepaths,
+        ...     "content": get_content,  # auto-detected
+        ... }
+        >>> # Use column() only if auto-detection doesn't work:
+        >>> schema = {
         ...     "content": column(get_content, depends_on=["filepath"]),
-        ...     "summary": column(summarize, depends_on=["content"]),
         ... }
     """
     return CallableColumn(func, depends_on=depends_on)
@@ -238,22 +264,38 @@ class Dataset:
     def _build_dependency_graph(self) -> Dict[str, List[str]]:
         """Build dependency graph from schema."""
         dependencies = {}
+        schema_columns = set(self.schema.keys())
 
         for column, func in self.schema.items():
             deps = []
+            auto_detected = False
 
             if isinstance(func, CallableColumn):
-                # Explicit dependencies from CallableColumn wrapper
-                deps = list(func._depends_on)
+                if func._depends_on is not None:
+                    # Explicit override via column()
+                    deps = list(func._depends_on)
+                else:
+                    # Auto-detect from the wrapped function's source
+                    deps = _detect_callable_deps(func.func, schema_columns)
+                    auto_detected = True
             elif hasattr(func, "prompt_template"):
                 # Extract dependencies from generator functions
-                import re
-
                 template = getattr(func, "prompt_template", "")
                 deps = re.findall(r"\{(\w+)\}", template)
+            elif callable(func) and not isinstance(func, SampleFunction):
+                # Auto-detect dependencies from callable source code
+                deps = _detect_callable_deps(func, schema_columns)
+                auto_detected = True
 
-            # Only include dependencies that are in the schema
-            dependencies[column] = [dep for dep in deps if dep in self.schema]
+            # Filter to schema columns; also filter self-references
+            # for auto-detected deps (source inspection can pick up
+            # the column's own name spuriously)
+            dependencies[column] = [
+                dep
+                for dep in deps
+                if dep in schema_columns
+                and (not auto_detected or dep != column)
+            ]
 
         return dependencies
 

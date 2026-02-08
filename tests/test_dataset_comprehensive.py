@@ -507,39 +507,14 @@ class TestIntegration:
         assert all(df["task_type"].isin(["implementation", "explanation"]))
 
 
-class TestCallableColumn:
-    """Test CallableColumn and column() factory."""
+class TestCallableAutoDetection:
+    """Test auto-detection of callable dependencies."""
 
-    def test_column_factory_creates_callable_column(self):
-        """Test that column() returns a CallableColumn."""
-        func = lambda ctx: ctx["a"] * 2
-        col = column(func, depends_on=["a"])
-
-        assert isinstance(col, CallableColumn)
-        assert col._depends_on == ["a"]
-        assert col.func is func
-
-    def test_callable_column_no_deps(self):
-        """Test CallableColumn with no dependencies."""
-        col = CallableColumn(lambda ctx: 42)
-        assert col._depends_on == []
-        assert col({"x": 1}) == 42
-
-    def test_callable_column_multiple_deps(self):
-        """Test CallableColumn with multiple dependencies."""
-        col = column(lambda ctx: ctx["a"] + ctx["b"], depends_on=["a", "b"])
-        assert col._depends_on == ["a", "b"]
-        assert col({"a": 1, "b": 2}) == 3
-
-
-class TestCallableColumnDependencyGraph:
-    """Test dependency graph building with CallableColumn."""
-
-    def test_single_callable_dep(self):
-        """Test dependency detection for a single CallableColumn."""
+    def test_auto_detect_single_dep(self):
+        """Test auto-detecting a single dependency from source."""
         schema = {
             "a": ChoiceSampler([1, 2]),
-            "b": column(lambda ctx: ctx["a"] * 2, depends_on=["a"]),
+            "b": lambda ctx: ctx["a"] * 2,
         }
         ds = Dataset(schema, n=5)
         deps = ds._build_dependency_graph()
@@ -547,12 +522,19 @@ class TestCallableColumnDependencyGraph:
         assert deps["a"] == []
         assert deps["b"] == ["a"]
 
-    def test_chained_callable_deps(self):
-        """Test chained CallableColumn dependencies: a -> b -> c."""
+    def test_auto_detect_chained_deps(self):
+        """Test auto-detecting chained callable deps: a -> b -> c."""
+
+        def compute_b(ctx):
+            return ctx["a"] * 10
+
+        def compute_c(ctx):
+            return ctx["b"] + 1
+
         schema = {
             "a": ChoiceSampler([1, 2]),
-            "b": column(lambda ctx: ctx["a"] * 10, depends_on=["a"]),
-            "c": column(lambda ctx: ctx["b"] + 1, depends_on=["b"]),
+            "b": compute_b,
+            "c": compute_c,
         }
         ds = Dataset(schema, n=5)
         deps = ds._build_dependency_graph()
@@ -565,27 +547,35 @@ class TestCallableColumnDependencyGraph:
         assert order.index("a") < order.index("b")
         assert order.index("b") < order.index("c")
 
-    def test_callable_with_multiple_deps(self):
-        """Test CallableColumn depending on multiple columns."""
+    def test_auto_detect_multiple_deps(self):
+        """Test auto-detecting multiple dependencies."""
+
+        def combine(ctx):
+            return ctx["x"] + ctx["y"]
+
         schema = {
             "x": ChoiceSampler([1, 2]),
             "y": ChoiceSampler([10, 20]),
-            "z": column(lambda ctx: ctx["x"] + ctx["y"], depends_on=["x", "y"]),
+            "z": combine,
         }
         ds = Dataset(schema, n=5)
         deps = ds._build_dependency_graph()
 
         assert set(deps["z"]) == {"x", "y"}
 
-    def test_callable_dep_on_other_callable(self):
-        """Test CallableColumn depending on another CallableColumn."""
+    def test_auto_detect_callable_on_callable(self):
+        """Test auto-detecting deps between callables."""
+
+        def derived(ctx):
+            return ctx["base"] * 2
+
+        def final(ctx):
+            return ctx["derived"] + ctx["base"]
+
         schema = {
             "base": ChoiceSampler([1, 2, 3]),
-            "derived": column(lambda ctx: ctx["base"] * 2, depends_on=["base"]),
-            "final": column(
-                lambda ctx: ctx["derived"] + ctx["base"],
-                depends_on=["derived", "base"],
-            ),
+            "derived": derived,
+            "final": final,
         }
         ds = Dataset(schema, n=5)
         deps = ds._build_dependency_graph()
@@ -597,17 +587,15 @@ class TestCallableColumnDependencyGraph:
         assert order.index("base") < order.index("derived")
         assert order.index("derived") < order.index("final")
 
-    def test_callable_dep_on_generator(self):
-        """Test CallableColumn depending on a GeneratorFunction column."""
+    def test_auto_detect_with_generator_dep(self):
+        """Test auto-detecting callable dep on a GeneratorFunction column."""
         mock_gen = Mock(spec=GeneratorFunction)
         mock_gen.prompt_template = "Generate for {topic}"
 
         schema = {
             "topic": ChoiceSampler(["AI", "ML"]),
             "response": mock_gen,
-            "word_count": column(
-                lambda ctx: len(ctx["response"].split()), depends_on=["response"]
-            ),
+            "word_count": lambda ctx: len(ctx["response"].split()),
         }
         ds = Dataset(schema, n=5)
         deps = ds._build_dependency_graph()
@@ -617,41 +605,97 @@ class TestCallableColumnDependencyGraph:
         assert deps["word_count"] == ["response"]
 
     def test_circular_callable_deps_detected(self):
-        """Test circular dependencies between CallableColumns are detected."""
-        schema = {
-            "a": column(lambda ctx: ctx["b"], depends_on=["b"]),
-            "b": column(lambda ctx: ctx["a"], depends_on=["a"]),
-        }
+        """Test circular dependencies between callables are detected."""
+
+        def func_a(ctx):
+            return ctx["b"]
+
+        def func_b(ctx):
+            return ctx["a"]
+
+        schema = {"a": func_a, "b": func_b}
         ds = Dataset(schema, n=5)
         deps = ds._build_dependency_graph()
 
         with pytest.raises(ValueError, match="Circular dependency"):
             ds._topological_sort(deps)
 
-    def test_callable_dep_outside_schema_filtered(self):
-        """Test that deps on non-existent columns are filtered out."""
+    def test_non_schema_keys_filtered(self):
+        """Test that detected keys not in schema are ignored."""
+
+        def func(ctx):
+            return ctx["real_col"] + ctx["not_a_column"]
+
         schema = {
-            "a": column(
-                lambda ctx: 42, depends_on=["a", "nonexistent"]
-            ),
+            "real_col": ChoiceSampler([1]),
+            "result": func,
         }
         ds = Dataset(schema, n=5)
         deps = ds._build_dependency_graph()
 
-        # "nonexistent" is filtered, "a" causes self-dep
-        assert "nonexistent" not in deps["a"]
+        assert deps["result"] == ["real_col"]
+
+    def test_self_reference_filtered(self):
+        """Test that self-references are filtered from auto-detected deps."""
+
+        def func(ctx):
+            return ctx.get("myself", 0) + 1
+
+        schema = {"myself": func}
+        ds = Dataset(schema, n=5)
+        deps = ds._build_dependency_graph()
+
+        assert deps["myself"] == []
+
+    def test_samplers_skip_auto_detect(self):
+        """Test that SampleFunction instances are not source-inspected."""
+        schema = {
+            "a": ChoiceSampler([1, 2]),
+            "b": ChoiceSampler([3, 4]),
+        }
+        ds = Dataset(schema, n=5)
+        deps = ds._build_dependency_graph()
+
+        assert deps["a"] == []
+        assert deps["b"] == []
+
+
+class TestCallableColumnExplicitOverride:
+    """Test column() as explicit override when auto-detection is insufficient."""
+
+    def test_explicit_override_respected(self):
+        """Test that column() with depends_on overrides auto-detection."""
+        schema = {
+            "a": ChoiceSampler([1]),
+            "b": ChoiceSampler([2]),
+            "c": column(lambda ctx: ctx["a"], depends_on=["a", "b"]),
+        }
+        ds = Dataset(schema, n=5)
+        deps = ds._build_dependency_graph()
+
+        # Explicit override: both a and b, even though source only shows "a"
+        assert set(deps["c"]) == {"a", "b"}
+
+    def test_column_factory_creates_callable_column(self):
+        """Test that column() returns a CallableColumn."""
+        func = lambda ctx: ctx["a"] * 2
+        col = column(func, depends_on=["a"])
+
+        assert isinstance(col, CallableColumn)
+        assert col._depends_on == ["a"]
+        assert col.func is func
 
 
 @pytest.mark.asyncio
 class TestCallableColumnGeneration:
-    """Test actual generation with CallableColumn dependencies."""
+    """Test actual generation with auto-detected callable dependencies."""
 
     async def test_simple_callable_chain(self):
-        """Test generation with a simple callable chain."""
+        """Test generation with auto-detected callable chain."""
         schema = {
             "base": ChoiceSampler([10, 20, 30]),
-            "doubled": column(lambda ctx: ctx["base"] * 2, depends_on=["base"]),
-            "tripled": column(lambda ctx: ctx["base"] * 3, depends_on=["base"]),
+            "doubled": lambda ctx: ctx["base"] * 2,
+            "tripled": lambda ctx: ctx["base"] * 3,
         }
         ds = Dataset(schema, n=5)
         df = await ds.generate(progress=False)
@@ -663,14 +707,21 @@ class TestCallableColumnGeneration:
 
     async def test_chained_callable_columns(self):
         """Test callable columns that depend on other callable columns."""
+
+        def step1(ctx):
+            return ctx["seed"] * 10
+
+        def step2(ctx):
+            return ctx["step1"] + 5
+
+        def step3(ctx):
+            return ctx["step2"] * ctx["seed"]
+
         schema = {
             "seed": ChoiceSampler([1, 2, 3]),
-            "step1": column(lambda ctx: ctx["seed"] * 10, depends_on=["seed"]),
-            "step2": column(lambda ctx: ctx["step1"] + 5, depends_on=["step1"]),
-            "step3": column(
-                lambda ctx: ctx["step2"] * ctx["seed"],
-                depends_on=["step2", "seed"],
-            ),
+            "step1": step1,
+            "step2": step2,
+            "step3": step3,
         }
         ds = Dataset(schema, n=10)
         df = await ds.generate(progress=False)
@@ -699,7 +750,7 @@ class TestCallableColumnGeneration:
 
         schema = {
             "filepath": get_filepath,
-            "content": column(get_content, depends_on=["filepath"]),
+            "content": get_content,
         }
         ds = Dataset(schema, n=5)
         df = await ds.generate(progress=False)
@@ -729,8 +780,8 @@ class TestCallableColumnGeneration:
 
         schema = {
             "filepath": get_filepath,
-            "content": column(get_content, depends_on=["filepath"]),
-            "import_count": column(count_imports, depends_on=["content"]),
+            "content": get_content,
+            "import_count": count_imports,
         }
         ds = Dataset(schema, n=6)
         df = await ds.generate(progress=False)
@@ -740,8 +791,8 @@ class TestCallableColumnGeneration:
             expected_count = fake_files[row["filepath"]].count("import")
             assert row["import_count"] == expected_count
 
-    async def test_async_callable_column(self):
-        """Test async callable in a CallableColumn."""
+    async def test_async_callable_auto_detected(self):
+        """Test async callable with auto-detected deps."""
 
         async def async_process(ctx):
             await asyncio.sleep(0.001)
@@ -749,7 +800,7 @@ class TestCallableColumnGeneration:
 
         schema = {
             "value": ChoiceSampler([1, 2, 3]),
-            "processed": column(async_process, depends_on=["value"]),
+            "processed": async_process,
         }
         ds = Dataset(schema, n=5)
         df = await ds.generate(progress=False)
@@ -759,7 +810,7 @@ class TestCallableColumnGeneration:
             assert row["processed"] == row["value"] * 100
 
     async def test_mixed_generator_and_callable_deps(self):
-        """Test CallableColumn depending on a GeneratorFunction column."""
+        """Test callable depending on a GeneratorFunction column."""
 
         class MockGenerator(BaseGenerator):
             async def generate(self, prompt: str, **kwargs) -> str:
@@ -770,9 +821,7 @@ class TestCallableColumnGeneration:
         schema = {
             "topic": ChoiceSampler(["AI", "ML"]),
             "response": gen_func,
-            "word_count": column(
-                lambda ctx: len(ctx["response"].split()), depends_on=["response"]
-            ),
+            "word_count": lambda ctx: len(ctx["response"].split()),
         }
         ds = Dataset(schema, n=3)
         df = await ds.generate(progress=False)
