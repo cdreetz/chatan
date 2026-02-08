@@ -7,7 +7,7 @@ import os
 from unittest.mock import Mock
 from datasets import Dataset as HFDataset
 
-from chatan.dataset import Dataset, dataset, depends_on
+from chatan.dataset import Dataset, call, dataset, depends_on
 from chatan.generator import GeneratorFunction, BaseGenerator
 from chatan.sampler import ChoiceSampler, UUIDSampler
 
@@ -136,7 +136,7 @@ class TestDependencyResolution:
         """Test explicit dependencies for callables."""
         schema = {
             "col1": ChoiceSampler(["A"]),
-            "col2": depends_on(lambda ctx: f"v:{ctx['col1']}", "col1"),
+            "col2": call(lambda ctx: f"v:{ctx['col1']}", with_=["col1"]),
             "col3": (lambda ctx: f"w:{ctx['col2']}", ["col2"]),
         }
         ds = Dataset(schema, n=2)
@@ -223,13 +223,13 @@ class TestDataGeneration:
             assert row["d"] == row["b"] + row["c"]
             assert row["e"] == row["a"] + row["d"]
 
-    async def test_callable_depends_on_wrapper(self):
-        """Test callable dependencies via depends_on wrapper."""
+    async def test_callable_call_wrapper(self):
+        """Test callable dependencies via call wrapper."""
         schema = {
-            "file_path": lambda ctx: "src/main.ts",
-            "file_content": depends_on(
+            "file_path": call(lambda: "src/main.ts"),
+            "file_content": call(
                 lambda ctx: f"content:{ctx['file_path']}",
-                "file_path",
+                with_=["file_path"],
             ),
         }
         ds = Dataset(schema, n=5)
@@ -237,6 +237,36 @@ class TestDataGeneration:
 
         assert len(df) == 5
         assert all(df["file_content"] == "content:src/main.ts")
+
+    async def test_callable_call_wrapper_with_keyword_alias(self):
+        """Test call wrapper supports 'with' keyword alias via kwargs expansion."""
+        schema = {
+            "file_path": call(lambda: "src/alias.ts"),
+            "file_content": call(
+                lambda ctx: f"content:{ctx['file_path']}",
+                **{"with": ["file_path"]},
+            ),
+        }
+        ds = Dataset(schema, n=3)
+        df = await ds.generate()
+
+        assert len(df) == 3
+        assert all(df["file_content"] == "content:src/alias.ts")
+
+    async def test_depends_on_backwards_compatible(self):
+        """Test depends_on still works as alias."""
+        schema = {
+            "file_path": lambda ctx: "src/legacy.ts",
+            "file_content": depends_on(
+                lambda ctx: f"content:{ctx['file_path']}",
+                "file_path",
+            ),
+        }
+        ds = Dataset(schema, n=3)
+        df = await ds.generate()
+
+        assert len(df) == 3
+        assert all(df["file_content"] == "content:src/legacy.ts")
 
     async def test_callable_tuple_dependency_spec(self):
         """Test callable dependencies via tuple spec."""

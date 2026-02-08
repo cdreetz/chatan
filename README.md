@@ -50,18 +50,19 @@ df = asyncio.run(main())
 For plain callables, declare dependencies explicitly when one column needs another:
 
 ```python
-from chatan import dataset, depends_on
+from chatan import call, dataset
 
 ds = dataset({
-    "file_path": lambda ctx: get_random_filepath(),
-    "file_content": depends_on(
+    "file_path": call(lambda: get_random_filepath()),
+    "file_content": call(
         lambda ctx: get_file_content(ctx["file_path"]),
-        "file_path",
+        with_=["file_path"],
     ),
 })
 ```
 
 You can also use tuple syntax: `"file_content": (callable_fn, ["file_path"])`.
+(`with` is a Python keyword, so use `with_` in normal calls.)
 
 ## Generator Options
 

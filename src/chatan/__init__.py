@@ -2,7 +2,7 @@
 
 __version__ = "0.3.0"
 
-from .dataset import dataset, depends_on
+from .dataset import call, dataset, depends_on
 from .evaluate import eval, evaluate
 from .generator import generator
 from .sampler import sample
@@ -10,6 +10,7 @@ from .viewer import generate_with_viewer
 
 __all__ = [
     "dataset",
+    "call",
     "depends_on",
     "generator",
     "sample",

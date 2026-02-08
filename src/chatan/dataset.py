@@ -1,6 +1,7 @@
 """Dataset creation and manipulation with async generation."""
 
 import asyncio
+import inspect
 from typing import Any, Callable, Dict, Iterable, List, Optional, Union
 
 import pandas as pd
@@ -210,9 +211,6 @@ class Dataset:
     @staticmethod
     def _resolve_column_callable(func: Any) -> Any:
         """Unwrap schema value to the executable callable/value."""
-        if isinstance(func, DependentCallable):
-            return func.func
-
         if (
             isinstance(func, tuple)
             and len(func) == 2
@@ -324,23 +322,67 @@ def dataset(schema: Union[Dict[str, Any], str], n: int = 100) -> Dataset:
 class DependentCallable:
     """Wrapper for callables with explicit column dependencies."""
 
-    def __init__(self, func: Callable[[Dict[str, Any]], Any], dependencies: List[str]):
+    def __init__(self, func: Callable[..., Any], dependencies: List[str]):
         self.func = func
         self.dependencies = dependencies
+        self._accepts_context = _callable_accepts_context(func)
 
     def __call__(self, context: Dict[str, Any]) -> Any:
-        return self.func(context)
+        if self._accepts_context:
+            return self.func(context)
+        return self.func()
 
 
-def depends_on(
-    func: Callable[[Dict[str, Any]], Any], *dependencies: str
+def call(
+    func: Callable[..., Any], *dependencies: str, with_: Optional[List[str]] = None, **kwargs
 ) -> DependentCallable:
-    """Declare explicit column dependencies for callable schema entries.
+    """Declare callable schema entries and optional explicit dependencies.
 
     Example:
         schema = {
-            "file_path": lambda ctx: "...",
-            "file_content": depends_on(lambda ctx: load(ctx["file_path"]), "file_path"),
+            "file_path": call(lambda: random_path()),
+            "file_content": call(
+                lambda ctx: load(ctx["file_path"]),
+                with_=["file_path"],
+            ),
         }
     """
-    return DependentCallable(func, list(dependencies))
+    with_deps = kwargs.pop("with", None)
+    if kwargs:
+        unexpected = ", ".join(kwargs.keys())
+        raise TypeError(f"Unexpected keyword argument(s): {unexpected}")
+
+    explicit = list(dependencies)
+    if with_:
+        explicit.extend(with_)
+    if with_deps:
+        if isinstance(with_deps, str):
+            explicit.append(with_deps)
+        else:
+            explicit.extend(with_deps)
+
+    return DependentCallable(func, explicit)
+
+
+def depends_on(func: Callable[..., Any], *dependencies: str) -> DependentCallable:
+    """Backward-compatible alias for explicit callable dependencies."""
+    return call(func, *dependencies)
+
+
+def _callable_accepts_context(func: Callable[..., Any]) -> bool:
+    """Return True when callable can accept a context argument."""
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        # Builtins/c-extensions without inspect metadata: keep legacy behavior.
+        return True
+
+    params = list(signature.parameters.values())
+    if not params:
+        return False
+
+    for param in params:
+        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+            return True
+
+    return True
