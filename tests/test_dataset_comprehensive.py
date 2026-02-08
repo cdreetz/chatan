@@ -831,6 +831,289 @@ class TestCallableColumnGeneration:
             assert row["word_count"] == len(row["response"].split())
 
 
+class TestParameterInjection:
+    """Test parameter name injection — the clean API where function params match columns."""
+
+    def test_param_name_detects_single_dep(self):
+        """Function with param matching a column name → detected as dep."""
+
+        def doubled(base):
+            return base * 2
+
+        schema = {
+            "base": ChoiceSampler([1, 2, 3]),
+            "doubled": doubled,
+        }
+        ds = Dataset(schema, n=5)
+        deps = ds._build_dependency_graph()
+
+        assert deps["base"] == []
+        assert deps["doubled"] == ["base"]
+
+    def test_param_name_detects_multiple_deps(self):
+        """Function with multiple params matching columns."""
+
+        def total(price, quantity):
+            return price * quantity
+
+        schema = {
+            "price": ChoiceSampler([10, 20]),
+            "quantity": ChoiceSampler([1, 5]),
+            "total": total,
+        }
+        ds = Dataset(schema, n=5)
+        deps = ds._build_dependency_graph()
+
+        assert set(deps["total"]) == {"price", "quantity"}
+
+    def test_param_name_chain(self):
+        """Chained deps via param names: a -> b -> c."""
+
+        def step1(seed):
+            return seed * 10
+
+        def step2(step1):
+            return step1 + 5
+
+        schema = {
+            "seed": ChoiceSampler([1, 2]),
+            "step1": step1,
+            "step2": step2,
+        }
+        ds = Dataset(schema, n=5)
+        deps = ds._build_dependency_graph()
+
+        assert deps["seed"] == []
+        assert deps["step1"] == ["seed"]
+        assert deps["step2"] == ["step1"]
+
+        order = ds._topological_sort(deps)
+        assert order.index("seed") < order.index("step1")
+        assert order.index("step1") < order.index("step2")
+
+    def test_no_arg_function(self):
+        """Zero-arg function → no deps, called with no args."""
+        import uuid
+
+        def make_id():
+            return str(uuid.uuid4())
+
+        schema = {
+            "id": make_id,
+            "value": ChoiceSampler([1]),
+        }
+        ds = Dataset(schema, n=5)
+        deps = ds._build_dependency_graph()
+
+        assert deps["id"] == []
+
+    def test_non_column_param_falls_back_to_ctx(self):
+        """Single param not matching any column → ctx mode (legacy compat)."""
+
+        def compute(row):
+            return row["base"] * 2
+
+        schema = {
+            "base": ChoiceSampler([10]),
+            "result": compute,
+        }
+        ds = Dataset(schema, n=5)
+        deps = ds._build_dependency_graph()
+
+        # Falls back to source inspection, finds "base" via ctx["base"]
+        assert deps["result"] == ["base"]
+
+    def test_mixed_column_and_default_params(self):
+        """Params matching columns plus params with defaults → inject mode."""
+
+        def compute(base, multiplier=2):
+            return base * multiplier
+
+        schema = {
+            "base": ChoiceSampler([5, 10]),
+            "result": compute,
+        }
+        ds = Dataset(schema, n=5)
+        deps = ds._build_dependency_graph()
+
+        assert deps["result"] == ["base"]
+
+
+@pytest.mark.asyncio
+class TestParameterInjectionGeneration:
+    """Test actual generation with parameter injection."""
+
+    async def test_simple_param_injection(self):
+        """Function params matching column names get injected values."""
+
+        def doubled(base):
+            return base * 2
+
+        schema = {
+            "base": ChoiceSampler([10, 20, 30]),
+            "doubled": doubled,
+        }
+        ds = Dataset(schema, n=5)
+        df = await ds.generate(progress=False)
+
+        assert len(df) == 5
+        for _, row in df.iterrows():
+            assert row["doubled"] == row["base"] * 2
+
+    async def test_multi_param_injection(self):
+        """Multiple params injected from different columns."""
+
+        def total(price, quantity):
+            return price * quantity
+
+        schema = {
+            "price": ChoiceSampler([10, 20]),
+            "quantity": ChoiceSampler([1, 2, 5]),
+            "total": total,
+        }
+        ds = Dataset(schema, n=10)
+        df = await ds.generate(progress=False)
+
+        assert len(df) == 10
+        for _, row in df.iterrows():
+            assert row["total"] == row["price"] * row["quantity"]
+
+    async def test_chained_param_injection(self):
+        """Chained callable columns via param injection."""
+
+        def step1(seed):
+            return seed * 10
+
+        def step2(step1):
+            return step1 + 5
+
+        def step3(step2, seed):
+            return step2 * seed
+
+        schema = {
+            "seed": ChoiceSampler([1, 2, 3]),
+            "step1": step1,
+            "step2": step2,
+            "step3": step3,
+        }
+        ds = Dataset(schema, n=10)
+        df = await ds.generate(progress=False)
+
+        assert len(df) == 10
+        for _, row in df.iterrows():
+            assert row["step1"] == row["seed"] * 10
+            assert row["step2"] == row["step1"] + 5
+            assert row["step3"] == row["step2"] * row["seed"]
+
+    async def test_async_param_injection(self):
+        """Async functions work with param injection."""
+
+        async def async_doubled(base):
+            await asyncio.sleep(0.001)
+            return base * 2
+
+        schema = {
+            "base": ChoiceSampler([5, 10]),
+            "doubled": async_doubled,
+        }
+        ds = Dataset(schema, n=5)
+        df = await ds.generate(progress=False)
+
+        assert len(df) == 5
+        for _, row in df.iterrows():
+            assert row["doubled"] == row["base"] * 2
+
+    async def test_no_arg_function_generation(self):
+        """Zero-arg functions called correctly."""
+        import uuid
+
+        def make_id():
+            return str(uuid.uuid4())
+
+        schema = {
+            "id": make_id,
+            "base": ChoiceSampler([1]),
+        }
+        ds = Dataset(schema, n=5)
+        df = await ds.generate(progress=False)
+
+        assert len(df) == 5
+        assert len(df["id"].unique()) == 5  # All unique UUIDs
+
+    async def test_filepath_content_param_injection(self):
+        """User's primary use case with param injection."""
+        fake_files = {
+            "/repo/main.py": "print('hello')",
+            "/repo/utils.py": "def helper(): pass",
+        }
+
+        def get_filepath():
+            import random
+            return random.choice(list(fake_files.keys()))
+
+        def get_content(file_path):
+            return fake_files[file_path]
+
+        schema = {
+            "file_path": get_filepath,
+            "file_content": get_content,
+        }
+        ds = Dataset(schema, n=5)
+        df = await ds.generate(progress=False)
+
+        assert len(df) == 5
+        for _, row in df.iterrows():
+            assert row["file_path"] in fake_files
+            assert row["file_content"] == fake_files[row["file_path"]]
+
+    async def test_param_injection_with_generator(self):
+        """Param injection works alongside GeneratorFunction columns."""
+
+        class MockGenerator(BaseGenerator):
+            async def generate(self, prompt: str, **kwargs) -> str:
+                return f"Generated: {prompt}"
+
+        gen_func = GeneratorFunction(MockGenerator(), "write about {file_content}")
+
+        def get_content(topic):
+            return f"Content about {topic}"
+
+        schema = {
+            "topic": ChoiceSampler(["AI", "ML"]),
+            "file_content": get_content,
+            "query": gen_func,
+        }
+        ds = Dataset(schema, n=3)
+        df = await ds.generate(progress=False)
+
+        assert len(df) == 3
+        for _, row in df.iterrows():
+            assert row["file_content"] == f"Content about {row['topic']}"
+            assert "Generated:" in row["query"]
+
+    async def test_backward_compat_ctx_pattern(self):
+        """Old ctx dict pattern still works alongside param injection."""
+
+        def new_style(base):
+            return base * 2
+
+        def old_style(ctx):
+            return ctx["base"] * 3
+
+        schema = {
+            "base": ChoiceSampler([10, 20]),
+            "new": new_style,
+            "old": old_style,
+        }
+        ds = Dataset(schema, n=5)
+        df = await ds.generate(progress=False)
+
+        assert len(df) == 5
+        for _, row in df.iterrows():
+            assert row["new"] == row["base"] * 2
+            assert row["old"] == row["base"] * 3
+
+
 class TestFactoryPatternAutoDetection:
     """Test auto-detection for factory functions that return closures."""
 

@@ -3,7 +3,7 @@
 import asyncio
 import inspect
 import re
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import pandas as pd
 from datasets import Dataset as HFDataset
@@ -13,30 +13,70 @@ from .evaluate import DatasetEvaluator, EvaluationFunction
 from .generator import GeneratorFunction
 from .sampler import SampleFunction
 
+# Call modes for callable columns
+_INJECT = "inject"  # call with matched column values as keyword args
+_CTX = "ctx"  # call with full row dict (legacy lambda ctx: ... pattern)
+_NO_ARGS = "no_args"  # call with no arguments
 
-def _detect_callable_deps(func, schema_columns: Set[str]) -> List[str]:
-    """Auto-detect dependencies by inspecting a callable's source code.
 
-    Detection works in two ways:
-    1. Direct string subscripts: row["col"] or row['col']
-    2. Closure variable subscripts: row[col_var] where col_var is a
-       captured string matching a schema column (enables factory pattern)
+def _resolve_callable(func, schema_columns: Set[str]) -> Tuple[List[str], str]:
+    """Figure out how to call a callable and what columns it depends on.
+
+    Returns (deps, call_mode) where call_mode is one of:
+      - "inject": function params match column names, call with those values
+      - "ctx": single-arg function, call with full row dict
+      - "no_args": zero-arg function, call with nothing
     """
+    # Try parameter name matching first (the clean path)
+    try:
+        sig = inspect.signature(func)
+    except (ValueError, TypeError):
+        return _detect_source_deps(func, schema_columns), _CTX
+
+    params = list(sig.parameters.values())
+    column_params = []
+    other_required = []
+
+    for p in params:
+        if p.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+            continue
+        if p.name in schema_columns:
+            column_params.append(p.name)
+        elif p.default is inspect.Parameter.empty:
+            other_required.append(p.name)
+
+    # If params match column names and nothing else is required → inject
+    if column_params and not other_required:
+        return column_params, _INJECT
+
+    # No params at all, or all non-column params have defaults → no-arg
+    if not other_required and not column_params:
+        return [], _NO_ARGS
+
+    # Single required param that doesn't match a column → legacy ctx pattern
+    if len(other_required) == 1 and not column_params:
+        deps = _detect_source_deps(func, schema_columns)
+        return deps, _CTX
+
+    # Fallback: source inspection + ctx mode
+    deps = _detect_source_deps(func, schema_columns)
+    return deps, _CTX
+
+
+def _detect_source_deps(func, schema_columns: Set[str]) -> List[str]:
+    """Fallback: detect deps by inspecting source for dict subscript patterns."""
     try:
         source = inspect.getsource(func)
     except (OSError, TypeError):
         return []
 
-    # 1. Match direct string subscripts: row["col"] or row['col']
+    # Match any_var["key"] or any_var['key']
     accessed_keys = re.findall(r"""\w+\[['"](\w+)['"]\]""", source)
 
-    # 2. Match variable subscripts: row[var_name] — resolve via closure
-    #    This enables factory functions like get_content("file_path")
-    #    that return closures doing row[col_param]
+    # Resolve closure variables: row[var] where var is a captured string
     if hasattr(func, "__code__") and hasattr(func, "__closure__") and func.__closure__:
         freevars = func.__code__.co_freevars
         closure_cells = func.__closure__
-        # Find variable subscripts (identifiers, not string literals or numbers)
         var_subscripts = re.findall(r"""\w+\[([a-zA-Z_]\w*)\]""", source)
         for var_name in var_subscripts:
             if var_name in freevars:
@@ -52,18 +92,22 @@ def _detect_callable_deps(func, schema_columns: Set[str]) -> List[str]:
     return list(dict.fromkeys(k for k in accessed_keys if k in schema_columns))
 
 
+def column(func, depends_on: Optional[List[str]] = None) -> "CallableColumn":
+    """Explicitly declare dependencies for a callable column.
+
+    In most cases you don't need this — dependencies are auto-detected
+    from function parameter names or source code.
+
+    Use this only when auto-detection fails (e.g., dynamic key access).
+    """
+    return CallableColumn(func, depends_on=depends_on)
+
+
 class CallableColumn:
     """Wraps a callable with explicit dependency declarations.
 
-    Only needed when auto-detection doesn't work for your use case
-    (e.g., dynamic key access). In most cases, just pass a plain
-    callable and dependencies are detected automatically.
-
-    Example:
-        >>> schema = {
-        ...     "filepath": get_filepaths,
-        ...     "content": get_content,  # auto-detects dep on filepath
-        ... }
+    Only needed when auto-detection doesn't work. In most cases,
+    just pass a plain function and name its parameters after columns.
     """
 
     def __init__(self, func, depends_on: Optional[List[str]] = None):
@@ -76,34 +120,6 @@ class CallableColumn:
                 "Async CallableColumn must be awaited. This is handled internally."
             )
         return self.func(context)
-
-
-def column(func, depends_on: Optional[List[str]] = None) -> CallableColumn:
-    """Explicitly declare dependencies for a callable column.
-
-    In most cases you don't need this — dependencies are auto-detected
-    from source code. Use this only when auto-detection fails (e.g.,
-    dynamic key access, C extensions).
-
-    Args:
-        func: A callable (sync or async) that takes a row context dict.
-        depends_on: List of column names this callable depends on.
-
-    Returns:
-        A CallableColumn wrapping the function with dependency metadata.
-
-    Example:
-        >>> # Usually just pass the function directly:
-        >>> schema = {
-        ...     "filepath": get_filepaths,
-        ...     "content": get_content,  # auto-detected
-        ... }
-        >>> # Use column() only if auto-detection doesn't work:
-        >>> schema = {
-        ...     "content": column(get_content, depends_on=["filepath"]),
-        ... }
-    """
-    return CallableColumn(func, depends_on=depends_on)
 
 
 class Dataset:
@@ -124,6 +140,7 @@ class Dataset:
         self.schema = schema
         self.n = n
         self._data = None
+        self._call_info: Dict[str, Tuple[str, List[str]]] = {}
 
     @property
     def eval(self):
@@ -171,7 +188,7 @@ class Dataset:
         """
         num_samples = n or self.n
 
-        # Build dependency graph
+        # Build dependency graph and call info
         dependencies = self._build_dependency_graph()
         execution_order = self._topological_sort(dependencies)
 
@@ -249,31 +266,8 @@ class Dataset:
         for dep in column_deps:
             await completion_events[dep].wait()
 
-        # Generate the value
         func = self.schema[column]
-
-        if isinstance(func, CallableColumn):
-            # Unwrap CallableColumn to get the inner function
-            inner = func.func
-            if asyncio.iscoroutinefunction(inner):
-                value = await inner(row)
-            else:
-                value = inner(row)
-        elif isinstance(func, GeneratorFunction):
-            # Use async generator
-            value = await func(row)
-        elif isinstance(func, SampleFunction):
-            # Samplers are sync but fast
-            value = func(row)
-        elif callable(func):
-            # Check if it's an async callable
-            if asyncio.iscoroutinefunction(func):
-                value = await func(row)
-            else:
-                value = func(row)
-        else:
-            # Static value
-            value = func
+        value = await self._call_func(column, func, row)
 
         # Update row dict (thread-safe within event loop)
         row[column] = value
@@ -283,40 +277,94 @@ class Dataset:
 
         return value
 
+    async def _call_func(
+        self, column: str, func: Any, row: Dict[str, Any]
+    ) -> Any:
+        """Call a schema function with the right calling convention."""
+        if isinstance(func, GeneratorFunction):
+            return await func(row)
+
+        if isinstance(func, SampleFunction):
+            return func(row)
+
+        # Unwrap CallableColumn
+        actual_func = func.func if isinstance(func, CallableColumn) else func
+
+        if not callable(actual_func):
+            return actual_func  # static value
+
+        call_mode, inject_params = self._call_info.get(column, (_CTX, []))
+
+        if call_mode == _INJECT:
+            kwargs = {p: row[p] for p in inject_params}
+            if asyncio.iscoroutinefunction(actual_func):
+                return await actual_func(**kwargs)
+            return actual_func(**kwargs)
+        elif call_mode == _NO_ARGS:
+            if asyncio.iscoroutinefunction(actual_func):
+                return await actual_func()
+            return actual_func()
+        else:  # _CTX
+            if asyncio.iscoroutinefunction(actual_func):
+                return await actual_func(row)
+            return actual_func(row)
+
     def _build_dependency_graph(self) -> Dict[str, List[str]]:
         """Build dependency graph from schema."""
         dependencies = {}
+        self._call_info = {}
         schema_columns = set(self.schema.keys())
 
-        for column, func in self.schema.items():
-            deps = []
-            auto_detected = False
+        for col, func in self.schema.items():
+            deps: List[str] = []
+            call_mode = _CTX
 
             if isinstance(func, CallableColumn):
+                actual_func = func.func
                 if func._depends_on is not None:
-                    # Explicit override via column()
                     deps = list(func._depends_on)
+                    # Still figure out call mode from signature
+                    resolved_deps, call_mode = _resolve_callable(
+                        actual_func, schema_columns
+                    )
+                    inject_params = (
+                        resolved_deps if call_mode == _INJECT else []
+                    )
+                    self._call_info[col] = (call_mode, inject_params)
                 else:
-                    # Auto-detect from the wrapped function's source
-                    deps = _detect_callable_deps(func.func, schema_columns)
-                    auto_detected = True
+                    deps_resolved, call_mode = _resolve_callable(
+                        actual_func, schema_columns
+                    )
+                    deps = deps_resolved
+                    self._call_info[col] = (
+                        call_mode,
+                        deps_resolved if call_mode == _INJECT else [],
+                    )
             elif hasattr(func, "prompt_template"):
-                # Extract dependencies from generator functions
                 template = getattr(func, "prompt_template", "")
                 deps = re.findall(r"\{(\w+)\}", template)
-            elif callable(func) and not isinstance(func, SampleFunction):
-                # Auto-detect dependencies from callable source code
-                deps = _detect_callable_deps(func, schema_columns)
-                auto_detected = True
+            elif isinstance(func, SampleFunction):
+                deps = []
+            elif callable(func):
+                deps, call_mode = _resolve_callable(func, schema_columns)
+                self._call_info[col] = (
+                    call_mode,
+                    deps if call_mode == _INJECT else [],
+                )
 
-            # Filter to schema columns; also filter self-references
-            # for auto-detected deps (source inspection can pick up
-            # the column's own name spuriously)
-            dependencies[column] = [
+            # Filter to schema columns; filter self-refs for auto-detected
+            # Template deps ({variable} in prompts) are explicit, not auto-detected
+            is_template = hasattr(func, "prompt_template")
+            auto_detected = (
+                call_mode in (_INJECT, _CTX, _NO_ARGS)
+                and not (isinstance(func, CallableColumn) and func._depends_on is not None)
+                and not is_template
+            )
+            dependencies[col] = [
                 dep
                 for dep in deps
                 if dep in schema_columns
-                and (not auto_detected or dep != column)
+                and (not auto_detected or dep != col)
             ]
 
         return dependencies
