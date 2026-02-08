@@ -63,6 +63,18 @@ ds = dataset({
 
 You can also use tuple syntax: `"file_content": (callable_fn, ["file_path"])`.
 
+If your callable argument names match column names, dependencies are inferred automatically:
+
+```python
+def get_file_chunk(file_path):
+    return load_chunk(file_path)
+
+ds = dataset({
+    "file_path": call(get_random_filepath),
+    "file_chunk": call(get_file_chunk),  # infers dependency on file_path
+})
+```
+
 ## Generator Options
 
 ### API-based Generators (included in base install)

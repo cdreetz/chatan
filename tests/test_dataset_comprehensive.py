@@ -146,6 +146,27 @@ class TestDependencyResolution:
         assert dependencies["col2"] == ["col1"]
         assert dependencies["col3"] == ["col2"]
 
+    def test_signature_inferred_callable_dependencies(self):
+        """Test dependencies inferred from callable argument names."""
+
+        def col2(col1):
+            return f"v:{col1}"
+
+        def col3(col2):
+            return f"w:{col2}"
+
+        schema = {
+            "col1": ChoiceSampler(["A"]),
+            "col2": call(col2),
+            "col3": call(col3),
+        }
+        ds = Dataset(schema, n=2)
+
+        dependencies = ds._build_dependency_graph()
+        assert dependencies["col1"] == []
+        assert dependencies["col2"] == ["col1"]
+        assert dependencies["col3"] == ["col2"]
+
 
 @pytest.mark.asyncio
 class TestDataGeneration:
@@ -282,6 +303,25 @@ class TestDataGeneration:
 
         assert len(df) == 3
         assert all(df["file_content"] == "content:src/legacy.ts")
+
+    async def test_callable_call_wrapper_infers_dependencies_from_signature(self):
+        """Test call wrapper infers dependencies from function signature names."""
+
+        def file_path():
+            return "src/inferred.ts"
+
+        def file_content(file_path):
+            return f"content:{file_path}"
+
+        schema = {
+            "file_path": call(file_path),
+            "file_content": call(file_content),
+        }
+        ds = Dataset(schema, n=3)
+        df = await ds.generate()
+
+        assert len(df) == 3
+        assert all(df["file_content"] == "content:src/inferred.ts")
 
     async def test_callable_tuple_dependency_spec(self):
         """Test callable dependencies via tuple spec."""

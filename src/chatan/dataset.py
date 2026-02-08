@@ -12,6 +12,8 @@ from .evaluate import DatasetEvaluator, EvaluationFunction
 from .generator import GeneratorFunction
 from .sampler import SampleFunction
 
+CONTEXT_ARG_NAMES = {"ctx", "context"}
+
 
 class Dataset:
     """Async dataset generator with dependency-aware execution."""
@@ -166,7 +168,7 @@ class Dataset:
             # Samplers are sync but fast
             value = func(row)
         elif callable(func):
-            result = func(row)
+            result = _invoke_with_context(func, row)
             value = await result if asyncio.iscoroutine(result) else result
         else:
             # Static value
@@ -189,6 +191,7 @@ class Dataset:
             explicit_deps = self._extract_explicit_dependencies(func)
             if explicit_deps:
                 deps.extend(explicit_deps)
+            deps.extend(self._infer_signature_dependencies(func, column))
 
             # Extract dependencies from generator functions
             if hasattr(func, "prompt_template"):
@@ -211,6 +214,9 @@ class Dataset:
     @staticmethod
     def _resolve_column_callable(func: Any) -> Any:
         """Unwrap schema value to the executable callable/value."""
+        if isinstance(func, DependentCallable):
+            return func.func
+
         if (
             isinstance(func, tuple)
             and len(func) == 2
@@ -245,6 +251,37 @@ class Dataset:
         if isinstance(deps, Iterable):
             return [dep for dep in deps if isinstance(dep, str)]
         return []
+
+    def _infer_signature_dependencies(self, func: Any, current_column: str) -> List[str]:
+        """Infer dependencies from callable parameter names."""
+        target = self._resolve_column_callable(func)
+        if not callable(target):
+            return []
+        if isinstance(target, (GeneratorFunction, SampleFunction)):
+            return []
+
+        try:
+            signature = inspect.signature(target)
+        except (TypeError, ValueError):
+            return []
+
+        inferred = []
+        for param in signature.parameters.values():
+            if param.kind in (
+                inspect.Parameter.VAR_POSITIONAL,
+                inspect.Parameter.VAR_KEYWORD,
+            ):
+                continue
+            if param.name in CONTEXT_ARG_NAMES:
+                continue
+            if param.default is not inspect.Parameter.empty:
+                continue
+            if param.name == current_column:
+                continue
+            if param.name in self.schema:
+                inferred.append(param.name)
+
+        return inferred
 
     def _topological_sort(self, dependencies: Dict[str, List[str]]) -> List[str]:
         """Topologically sort columns by dependencies."""
@@ -325,12 +362,9 @@ class DependentCallable:
     def __init__(self, func: Callable[..., Any], dependencies: List[str]):
         self.func = func
         self.dependencies = dependencies
-        self._accepts_context = _callable_accepts_context(func)
 
     def __call__(self, context: Dict[str, Any]) -> Any:
-        if self._accepts_context:
-            return self.func(context)
-        return self.func()
+        return _invoke_with_context(self.func, context)
 
 
 def call(
@@ -378,20 +412,48 @@ def depends_on(func: Callable[..., Any], *dependencies: str) -> DependentCallabl
     return call(func, *dependencies)
 
 
-def _callable_accepts_context(func: Callable[..., Any]) -> bool:
-    """Return True when callable can accept a context argument."""
+def _invoke_with_context(func: Callable[..., Any], context: Dict[str, Any]) -> Any:
+    """Invoke callable using context-aware argument mapping."""
     try:
         signature = inspect.signature(func)
     except (TypeError, ValueError):
-        # Builtins/c-extensions without inspect metadata: keep legacy behavior.
-        return True
+        # Keep legacy behavior for callables without inspect metadata.
+        return func(context)
 
     params = list(signature.parameters.values())
     if not params:
-        return False
+        return func()
+
+    args = []
+    kwargs = {}
+    missing_required = False
 
     for param in params:
-        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
-            return True
+        if param.kind == inspect.Parameter.VAR_POSITIONAL:
+            continue
+        if param.kind == inspect.Parameter.VAR_KEYWORD:
+            continue
 
-    return True
+        if param.name in CONTEXT_ARG_NAMES:
+            value = context
+            has_value = True
+        else:
+            has_value = param.name in context
+            value = context.get(param.name)
+
+        if not has_value and param.default is inspect.Parameter.empty:
+            missing_required = True
+            continue
+        if not has_value:
+            continue
+
+        if param.kind == inspect.Parameter.POSITIONAL_ONLY:
+            args.append(value)
+        else:
+            kwargs[param.name] = value
+
+    if not missing_required:
+        return func(*args, **kwargs)
+
+    # Backward compatibility for legacy callables that expect `ctx`.
+    return func(context)
