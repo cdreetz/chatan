@@ -1,7 +1,7 @@
 """Dataset creation and manipulation with async generation."""
 
 import asyncio
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Union
 
 import pandas as pd
 from datasets import Dataset as HFDataset
@@ -156,7 +156,7 @@ class Dataset:
             await completion_events[dep].wait()
 
         # Generate the value
-        func = self.schema[column]
+        func = self._resolve_column_callable(self.schema[column])
 
         if isinstance(func, GeneratorFunction):
             # Use async generator
@@ -165,11 +165,8 @@ class Dataset:
             # Samplers are sync but fast
             value = func(row)
         elif callable(func):
-            # Check if it's an async callable
-            if asyncio.iscoroutinefunction(func):
-                value = await func(row)
-            else:
-                value = func(row)
+            result = func(row)
+            value = await result if asyncio.iscoroutine(result) else result
         else:
             # Static value
             value = func
@@ -188,18 +185,68 @@ class Dataset:
 
         for column, func in self.schema.items():
             deps = []
+            explicit_deps = self._extract_explicit_dependencies(func)
+            if explicit_deps:
+                deps.extend(explicit_deps)
 
             # Extract dependencies from generator functions
             if hasattr(func, "prompt_template"):
                 import re
 
                 template = getattr(func, "prompt_template", "")
-                deps = re.findall(r"\{(\w+)\}", template)
+                deps.extend(re.findall(r"\{(\w+)\}", template))
+
+            # Keep dependency order stable and remove duplicates.
+            ordered_deps = []
+            for dep in deps:
+                if dep not in ordered_deps:
+                    ordered_deps.append(dep)
 
             # Only include dependencies that are in the schema
-            dependencies[column] = [dep for dep in deps if dep in self.schema]
+            dependencies[column] = [dep for dep in ordered_deps if dep in self.schema]
 
         return dependencies
+
+    @staticmethod
+    def _resolve_column_callable(func: Any) -> Any:
+        """Unwrap schema value to the executable callable/value."""
+        if isinstance(func, DependentCallable):
+            return func.func
+
+        if (
+            isinstance(func, tuple)
+            and len(func) == 2
+            and callable(func[0])
+        ):
+            return func[0]
+
+        return func
+
+    @staticmethod
+    def _extract_explicit_dependencies(func: Any) -> List[str]:
+        """Extract explicit dependency declarations from schema value."""
+        deps = []
+
+        if isinstance(func, DependentCallable):
+            deps = func.dependencies
+        elif (
+            isinstance(func, tuple)
+            and len(func) == 2
+            and callable(func[0])
+        ):
+            deps = func[1]
+        elif hasattr(func, "dependencies"):
+            deps = getattr(func, "dependencies")
+        elif hasattr(func, "depends_on"):
+            deps = getattr(func, "depends_on")
+
+        if deps is None:
+            return []
+        if isinstance(deps, str):
+            return [deps]
+        if isinstance(deps, Iterable):
+            return [dep for dep in deps if isinstance(dep, str)]
+        return []
 
     def _topological_sort(self, dependencies: Dict[str, List[str]]) -> List[str]:
         """Topologically sort columns by dependencies."""
@@ -272,3 +319,28 @@ def dataset(schema: Union[Dict[str, Any], str], n: int = 100) -> Dataset:
         >>> df = asyncio.run(main())
     """
     return Dataset(schema, n)
+
+
+class DependentCallable:
+    """Wrapper for callables with explicit column dependencies."""
+
+    def __init__(self, func: Callable[[Dict[str, Any]], Any], dependencies: List[str]):
+        self.func = func
+        self.dependencies = dependencies
+
+    def __call__(self, context: Dict[str, Any]) -> Any:
+        return self.func(context)
+
+
+def depends_on(
+    func: Callable[[Dict[str, Any]], Any], *dependencies: str
+) -> DependentCallable:
+    """Declare explicit column dependencies for callable schema entries.
+
+    Example:
+        schema = {
+            "file_path": lambda ctx: "...",
+            "file_content": depends_on(lambda ctx: load(ctx["file_path"]), "file_path"),
+        }
+    """
+    return DependentCallable(func, list(dependencies))

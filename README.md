@@ -45,6 +45,24 @@ async def main():
 df = asyncio.run(main())
 ```
 
+### Explicit Dependencies For Callables
+
+For plain callables, declare dependencies explicitly when one column needs another:
+
+```python
+from chatan import dataset, depends_on
+
+ds = dataset({
+    "file_path": lambda ctx: get_random_filepath(),
+    "file_content": depends_on(
+        lambda ctx: get_file_content(ctx["file_path"]),
+        "file_path",
+    ),
+})
+```
+
+You can also use tuple syntax: `"file_content": (callable_fn, ["file_path"])`.
+
 ## Generator Options
 
 ### API-based Generators (included in base install)

@@ -7,7 +7,7 @@ import os
 from unittest.mock import Mock
 from datasets import Dataset as HFDataset
 
-from chatan.dataset import Dataset, dataset
+from chatan.dataset import Dataset, dataset, depends_on
 from chatan.generator import GeneratorFunction, BaseGenerator
 from chatan.sampler import ChoiceSampler, UUIDSampler
 
@@ -132,6 +132,20 @@ class TestDependencyResolution:
         # external_col should be filtered out
         assert dependencies["col2"] == ["col1"]
 
+    def test_explicit_callable_dependencies(self):
+        """Test explicit dependencies for callables."""
+        schema = {
+            "col1": ChoiceSampler(["A"]),
+            "col2": depends_on(lambda ctx: f"v:{ctx['col1']}", "col1"),
+            "col3": (lambda ctx: f"w:{ctx['col2']}", ["col2"]),
+        }
+        ds = Dataset(schema, n=2)
+
+        dependencies = ds._build_dependency_graph()
+        assert dependencies["col1"] == []
+        assert dependencies["col2"] == ["col1"]
+        assert dependencies["col3"] == ["col2"]
+
 
 @pytest.mark.asyncio
 class TestDataGeneration:
@@ -208,6 +222,36 @@ class TestDataGeneration:
             assert row["b"] == row["a"] * 10
             assert row["d"] == row["b"] + row["c"]
             assert row["e"] == row["a"] + row["d"]
+
+    async def test_callable_depends_on_wrapper(self):
+        """Test callable dependencies via depends_on wrapper."""
+        schema = {
+            "file_path": lambda ctx: "src/main.ts",
+            "file_content": depends_on(
+                lambda ctx: f"content:{ctx['file_path']}",
+                "file_path",
+            ),
+        }
+        ds = Dataset(schema, n=5)
+        df = await ds.generate()
+
+        assert len(df) == 5
+        assert all(df["file_content"] == "content:src/main.ts")
+
+    async def test_callable_tuple_dependency_spec(self):
+        """Test callable dependencies via tuple spec."""
+        schema = {
+            "file_path": lambda ctx: "src/app.ts",
+            "file_content": (
+                lambda ctx: f"content:{ctx['file_path']}",
+                ["file_path"],
+            ),
+        }
+        ds = Dataset(schema, n=5)
+        df = await ds.generate()
+
+        assert len(df) == 5
+        assert all(df["file_content"] == "content:src/app.ts")
 
     async def test_override_sample_count(self):
         """Test overriding sample count in generate()."""
