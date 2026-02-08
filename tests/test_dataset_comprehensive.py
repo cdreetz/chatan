@@ -829,3 +829,189 @@ class TestCallableColumnGeneration:
         assert len(df) == 3
         for _, row in df.iterrows():
             assert row["word_count"] == len(row["response"].split())
+
+
+class TestFactoryPatternAutoDetection:
+    """Test auto-detection for factory functions that return closures."""
+
+    def test_closure_variable_resolved(self):
+        """Test that closure variables referencing column names are detected."""
+
+        def get_content(filepath_col):
+            def _generate(row):
+                return row[filepath_col]
+            return _generate
+
+        schema = {
+            "file_path": ChoiceSampler(["/a.py", "/b.py"]),
+            "content": get_content("file_path"),
+        }
+        ds = Dataset(schema, n=5)
+        deps = ds._build_dependency_graph()
+
+        assert deps["file_path"] == []
+        assert deps["content"] == ["file_path"]
+
+    def test_factory_chain(self):
+        """Test chained factory functions auto-detect deps."""
+        import random
+
+        def pick_from(choices):
+            def _generate(row):
+                return random.choice(choices)
+            return _generate
+
+        def read_from(col_name):
+            files = {"/a.py": "import os", "/b.py": "import json"}
+            def _generate(row):
+                return files[row[col_name]]
+            return _generate
+
+        def analyze(col_name):
+            def _generate(row):
+                return len(row[col_name])
+            return _generate
+
+        schema = {
+            "file_path": pick_from(["/a.py", "/b.py"]),
+            "content": read_from("file_path"),
+            "length": analyze("content"),
+        }
+        ds = Dataset(schema, n=5)
+        deps = ds._build_dependency_graph()
+
+        assert deps["file_path"] == []
+        assert deps["content"] == ["file_path"]
+        assert deps["length"] == ["content"]
+
+        order = ds._topological_sort(deps)
+        assert order.index("file_path") < order.index("content")
+        assert order.index("content") < order.index("length")
+
+    def test_factory_with_multiple_column_refs(self):
+        """Test factory capturing multiple column references."""
+
+        def combine(col_a, col_b):
+            def _generate(row):
+                return str(row[col_a]) + str(row[col_b])
+            return _generate
+
+        schema = {
+            "first": ChoiceSampler(["A", "B"]),
+            "second": ChoiceSampler(["1", "2"]),
+            "combined": combine("first", "second"),
+        }
+        ds = Dataset(schema, n=5)
+        deps = ds._build_dependency_graph()
+
+        assert set(deps["combined"]) == {"first", "second"}
+
+
+@pytest.mark.asyncio
+class TestFactoryPatternGeneration:
+    """Test actual generation with factory-style callables."""
+
+    async def test_filepath_content_factory(self):
+        """Test the user's primary use case: filepath -> content via factories."""
+        import random
+
+        fake_files = {
+            "/repo/main.py": "print('hello')",
+            "/repo/utils.py": "def helper(): pass",
+            "/repo/test.py": "import pytest",
+        }
+
+        def get_filepath(repo_path):
+            files = list(repo_path.keys())
+            def _generate(row):
+                return random.choice(files)
+            return _generate
+
+        def get_content(filepath_col):
+            def _generate(row):
+                return fake_files[row[filepath_col]]
+            return _generate
+
+        schema = {
+            "file_path": get_filepath(fake_files),
+            "file_content": get_content("file_path"),
+        }
+        ds = Dataset(schema, n=5)
+        df = await ds.generate(progress=False)
+
+        assert len(df) == 5
+        for _, row in df.iterrows():
+            assert row["file_path"] in fake_files
+            assert row["file_content"] == fake_files[row["file_path"]]
+
+    async def test_three_level_factory_chain(self):
+        """Test filepath -> content -> analysis via factory chain."""
+        import random
+
+        fake_files = {
+            "/a.py": "import os\nimport sys",
+            "/b.py": "import json",
+        }
+
+        def get_filepath(file_dict):
+            paths = list(file_dict.keys())
+            def _generate(row):
+                return random.choice(paths)
+            return _generate
+
+        def get_content(filepath_col):
+            def _generate(row):
+                return fake_files[row[filepath_col]]
+            return _generate
+
+        def count_pattern(content_col, pattern):
+            def _generate(row):
+                return row[content_col].count(pattern)
+            return _generate
+
+        schema = {
+            "file_path": get_filepath(fake_files),
+            "file_content": get_content("file_path"),
+            "import_count": count_pattern("file_content", "import"),
+        }
+        ds = Dataset(schema, n=6)
+        df = await ds.generate(progress=False)
+
+        assert len(df) == 6
+        for _, row in df.iterrows():
+            expected = fake_files[row["file_path"]].count("import")
+            assert row["import_count"] == expected
+
+    async def test_factory_with_generator_mix(self):
+        """Test factories mixed with GeneratorFunction columns."""
+
+        class MockGenerator(BaseGenerator):
+            async def generate(self, prompt: str, **kwargs) -> str:
+                return f"Generated: {prompt}"
+
+        gen = GeneratorFunction(MockGenerator(), "write about {file_content}")
+
+        fake_files = {"main.py": "hello world"}
+
+        def get_filepath(files):
+            def _generate(row):
+                return list(files.keys())[0]
+            return _generate
+
+        def get_content(filepath_col):
+            def _generate(row):
+                return fake_files[row[filepath_col]]
+            return _generate
+
+        schema = {
+            "file_path": get_filepath(fake_files),
+            "file_content": get_content("file_path"),
+            "query": gen,
+        }
+        ds = Dataset(schema, n=2)
+        df = await ds.generate(progress=False)
+
+        assert len(df) == 2
+        for _, row in df.iterrows():
+            assert row["file_content"] == "hello world"
+            assert "Generated:" in row["query"]

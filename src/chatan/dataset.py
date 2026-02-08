@@ -17,16 +17,38 @@ from .sampler import SampleFunction
 def _detect_callable_deps(func, schema_columns: Set[str]) -> List[str]:
     """Auto-detect dependencies by inspecting a callable's source code.
 
-    Looks for dict subscript patterns like ctx["col"] or ctx['col'] in the
-    function source and returns any that match column names in the schema.
+    Detection works in two ways:
+    1. Direct string subscripts: row["col"] or row['col']
+    2. Closure variable subscripts: row[col_var] where col_var is a
+       captured string matching a schema column (enables factory pattern)
     """
     try:
         source = inspect.getsource(func)
     except (OSError, TypeError):
         return []
 
-    # Match any_var["key"] or any_var['key'] patterns
+    # 1. Match direct string subscripts: row["col"] or row['col']
     accessed_keys = re.findall(r"""\w+\[['"](\w+)['"]\]""", source)
+
+    # 2. Match variable subscripts: row[var_name] — resolve via closure
+    #    This enables factory functions like get_content("file_path")
+    #    that return closures doing row[col_param]
+    if hasattr(func, "__code__") and hasattr(func, "__closure__") and func.__closure__:
+        freevars = func.__code__.co_freevars
+        closure_cells = func.__closure__
+        # Find variable subscripts (identifiers, not string literals or numbers)
+        var_subscripts = re.findall(r"""\w+\[([a-zA-Z_]\w*)\]""", source)
+        for var_name in var_subscripts:
+            if var_name in freevars:
+                idx = freevars.index(var_name)
+                if idx < len(closure_cells):
+                    try:
+                        cell_value = closure_cells[idx].cell_contents
+                    except ValueError:
+                        continue
+                    if isinstance(cell_value, str):
+                        accessed_keys.append(cell_value)
+
     return list(dict.fromkeys(k for k in accessed_keys if k in schema_columns))
 
 
