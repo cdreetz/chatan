@@ -56,13 +56,12 @@ ds = dataset({
     "file_path": call(lambda: get_random_filepath()),
     "file_content": call(
         lambda ctx: get_file_content(ctx["file_path"]),
-        with_=["file_path"],
+        requires=["file_path"],
     ),
 })
 ```
 
 You can also use tuple syntax: `"file_content": (callable_fn, ["file_path"])`.
-(`with` is a Python keyword, so use `with_` in normal calls.)
 
 ## Generator Options
 

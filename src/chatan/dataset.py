@@ -334,7 +334,11 @@ class DependentCallable:
 
 
 def call(
-    func: Callable[..., Any], *dependencies: str, with_: Optional[List[str]] = None, **kwargs
+    func: Callable[..., Any],
+    *dependencies: str,
+    requires: Optional[List[str]] = None,
+    with_: Optional[List[str]] = None,
+    **kwargs,
 ) -> DependentCallable:
     """Declare callable schema entries and optional explicit dependencies.
 
@@ -343,7 +347,7 @@ def call(
             "file_path": call(lambda: random_path()),
             "file_content": call(
                 lambda ctx: load(ctx["file_path"]),
-                with_=["file_path"],
+                requires=["file_path"],
             ),
         }
     """
@@ -353,6 +357,11 @@ def call(
         raise TypeError(f"Unexpected keyword argument(s): {unexpected}")
 
     explicit = list(dependencies)
+    if requires:
+        if isinstance(requires, str):
+            explicit.append(requires)
+        else:
+            explicit.extend(requires)
     if with_:
         explicit.extend(with_)
     if with_deps:

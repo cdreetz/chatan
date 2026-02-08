@@ -136,7 +136,7 @@ class TestDependencyResolution:
         """Test explicit dependencies for callables."""
         schema = {
             "col1": ChoiceSampler(["A"]),
-            "col2": call(lambda ctx: f"v:{ctx['col1']}", with_=["col1"]),
+            "col2": call(lambda ctx: f"v:{ctx['col1']}", requires=["col1"]),
             "col3": (lambda ctx: f"w:{ctx['col2']}", ["col2"]),
         }
         ds = Dataset(schema, n=2)
@@ -229,7 +229,7 @@ class TestDataGeneration:
             "file_path": call(lambda: "src/main.ts"),
             "file_content": call(
                 lambda ctx: f"content:{ctx['file_path']}",
-                with_=["file_path"],
+                requires=["file_path"],
             ),
         }
         ds = Dataset(schema, n=5)
@@ -238,7 +238,7 @@ class TestDataGeneration:
         assert len(df) == 5
         assert all(df["file_content"] == "content:src/main.ts")
 
-    async def test_callable_call_wrapper_with_keyword_alias(self):
+    async def test_callable_call_wrapper_with_with_keyword_alias(self):
         """Test call wrapper supports 'with' keyword alias via kwargs expansion."""
         schema = {
             "file_path": call(lambda: "src/alias.ts"),
@@ -252,6 +252,21 @@ class TestDataGeneration:
 
         assert len(df) == 3
         assert all(df["file_content"] == "content:src/alias.ts")
+
+    async def test_callable_call_wrapper_supports_requires_string(self):
+        """Test call wrapper supports requires as a single string."""
+        schema = {
+            "file_path": call(lambda: "src/single.ts"),
+            "file_content": call(
+                lambda ctx: f"content:{ctx['file_path']}",
+                requires="file_path",
+            ),
+        }
+        ds = Dataset(schema, n=2)
+        df = await ds.generate()
+
+        assert len(df) == 2
+        assert all(df["file_content"] == "content:src/single.ts")
 
     async def test_depends_on_backwards_compatible(self):
         """Test depends_on still works as alias."""
